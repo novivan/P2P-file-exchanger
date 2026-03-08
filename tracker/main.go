@@ -13,7 +13,19 @@ type file struct {
 }
 
 func hello(c *gin.Context) {
-	c.JSON(http.StatusOK, "Hello!")
+	c.JSON(http.StatusOK, "Hello! as you can see, it is working!")
+}
+
+func get_all_manifests(c *gin.Context) {
+	c.JSON(http.StatusOK, "Now, there's only one manifest. And it's invalid. But it is a file at least. it's name is \"first_manifest\"")
+}
+
+func get_manifest_by_name(c *gin.Context) {
+	name := c.Param("name")
+	if name == "first_manifest" {
+		c.JSON(http.StatusOK, "filename: \"first_manifest\", body: \"Later here will be bytes\"\n")
+	}
+	c.JSON(http.StatusBadRequest, "there's no such manifest")
 }
 
 func main() {
@@ -21,6 +33,9 @@ func main() {
 
 	router := gin.Default()
 	router.GET("/hello", hello)
+	router.GET("/get/all/manifests", get_all_manifests)
+
+	router.GET("/get/manifest/by/name/:name", get_manifest_by_name)
 
 	router.Run(":8080")
 }

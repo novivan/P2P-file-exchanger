@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,7 +24,16 @@ func get_all_manifests(c *gin.Context) {
 func get_manifest_by_name(c *gin.Context) {
 	name := c.Param("name")
 	if name == "first_manifest" {
-		c.JSON(http.StatusOK, "filename: \"first_manifest\", body: \"Later here will be bytes\"\n")
+		data, err := os.ReadFile("file_storage/first_manifest.txt")
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, fmt.Sprintf("error while reading file: %v", err))
+			return
+		}
+		string_data := string(data)
+		result_string := fmt.Sprintf("filename: \"%s\", body: \"%s\"\n", name, string_data)
+		c.JSON(http.StatusOK, result_string)
+		return
 	}
 	c.JSON(http.StatusBadRequest, "there's no such manifest")
 }

@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"crypto/sha1"
 	"fmt"
 )
 
@@ -15,6 +16,67 @@ type Codec struct{}
 func (c *Codec) Say_hi() error {
 	fmt.Println("Codec says \"Hi!\"")
 	return nil
+}
+
+func (c *Codec) Encode(files [][]byte) ([]byte, error) {
+	files_amount := int64(len(files))
+	var sumlen int64 = 0
+	for _, file := range files {
+		sumlen += int64(len(file))
+	}
+	var chank_len int64 = 1
+	for chank_len*1024 < sumlen {
+		chank_len *= 2
+	}
+
+	var chanks_amount int64 = (sumlen + chank_len - 1) / chank_len
+
+	chanks := make([][]byte, chanks_amount)
+	hashed_chanks := make([][sha1.Size]byte, chanks_amount)
+
+	for i := range chanks {
+		chanks[i] = make([]byte, chank_len)
+	}
+
+	var chank_idx int64 = 0
+	var cur_shift_in_file int64 = 0
+	// заполняем чанки
+	for file_idx, file := range files {
+		var file_len int64 = int64(len(file))
+		for cur_shift_in_file < int64(len(file)) {
+			if file_len-cur_shift_in_file < chank_len {
+				copy(chanks[chank_idx], file[cur_shift_in_file:])
+				if file_idx < int(files_amount)-1 {
+					var filled int64 = file_len - cur_shift_in_file
+					copy(chanks[chank_idx][filled:], files[file_idx+1][:chank_len-filled])
+					cur_shift_in_file = chank_len - filled
+				}
+			} else {
+				copy(chanks[chank_idx], file[cur_shift_in_file:cur_shift_in_file+chank_len])
+				cur_shift_in_file += chank_len
+			}
+
+		}
+
+	}
+
+	for idx := range hashed_chanks {
+		var err error
+		hashed_chanks[idx], err = c.get_chunk_hash(chanks[idx])
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	// тут будем собирать уже наш файлик
+	//пока так:
+	return []byte{}, nil
+
+}
+
+func (c *Codec) get_chunk_hash(chank []byte) ([sha1.Size]byte, error) {
+	ret := sha1.Sum(chank)
+	return ret, nil
 }
 
 /*

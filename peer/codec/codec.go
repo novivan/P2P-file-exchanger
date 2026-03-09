@@ -3,6 +3,9 @@ package codec
 import (
 	"crypto/sha1"
 	"fmt"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 // в файлах будет 4 типа данных как в .torrent (классика):
@@ -12,6 +15,28 @@ import (
 // 4) ассоциативный массив (словарь)
 
 type Codec struct{}
+
+type FileMeta struct {
+	len  int64    // размер файла (все размеры в байтах)
+	path []string // элементы пути, разделенные слешем от корневой директории
+}
+
+type Info struct {
+	piece_lengt int64
+	pieces      []byte   // строка, содерджащая подряд все хеши чанков (мб потом передалю на string или на []rune)
+	name        string   // рекомендуемое имя файла (или папки, если манифест создавался из папки)
+	length      int64    //если файл один, то длина файла в байтах(инче ничего)
+	files       FileMeta // если файлов несколько
+
+}
+
+type ManifestFile struct {
+	info          Info      // информация о файлах
+	announce_list []string  // список url'ов трекеров (пока планиурется только один)
+	creation_date time.Time // timestamp создания
+	comment       string    // любой комментарий
+	created_by    uuid.UUID // id пира
+}
 
 func (c *Codec) Say_hi() error {
 	fmt.Println("Codec says \"Hi!\"")

@@ -22,17 +22,16 @@ type FileMeta struct {
 }
 
 type Info struct {
-	piece_lengt int64
-	pieces      []byte   // строка, содерджащая подряд все хеши чанков (мб потом передалю на string или на []rune)
-	name        string   // рекомендуемое имя файла (или папки, если манифест создавался из папки)
-	length      int64    //если файл один, то длина файла в байтах(инче ничего)
-	files       FileMeta // если файлов несколько
-
+	piece_length int64
+	pieces       [][sha1.Size]byte // хеши чанков
+	name         string            // рекомендуемое имя файла (или папки, если манифест создавался из папки)
+	length       int64             // если файл один, то длина файла в байтах (иначе ничего)
+	files        []FileMeta        // если файлов несколько
 }
 
 type ManifestFile struct {
 	info          Info      // информация о файлах
-	announce_list []string  // список url'ов трекеров (пока планиурется только один)
+	announce_list []string  // список url'ов трекеров (пока планируется только один)
 	creation_date time.Time // timestamp создания
 	comment       string    // любой комментарий
 	created_by    uuid.UUID // id пира
@@ -43,79 +42,77 @@ func (c *Codec) Say_hi() error {
 	return nil
 }
 
-func (c *Codec) Encode(files [][]byte) ([]byte, error) {
-	files_amount := int64(len(files))
+// calcChunkLen вычисляет размер чанка: минимальная степень двойки такая,
+// что чанков получается не более 1024 штук (как в BitTorrent — piece size >= sumlen/1024).
+func calcChunkLen(sumlen int64) int64 {
+	if sumlen == 0 {
+		return 1
+	}
+	var chunkLen int64 = 1
+	for chunkLen*1024 < sumlen {
+		chunkLen *= 2
+	}
+	return chunkLen
+}
+
+// Encode принимает содержимое файлов в виде срезов байт,
+// разбивает их на чанки фиксированного размера (файлы конкатенируются),
+// хеширует каждый чанк через SHA-1 и возвращает срез хешей.
+//
+// Последний чанк может быть короче остальных — он хешируется по реальной длине,
+// без нулевого паддинга.
+func (c *Codec) Encode(files [][]byte) ([][sha1.Size]byte, error) {
+	if len(files) == 0 {
+		return nil, fmt.Errorf("encode: no files provided")
+	}
+
+	// считаем суммарный размер
 	var sumlen int64 = 0
 	for _, file := range files {
 		sumlen += int64(len(file))
 	}
-	var chank_len int64 = 1
-	for chank_len*1024 < sumlen {
-		chank_len *= 2
+	if sumlen == 0 {
+		return nil, fmt.Errorf("encode: all files are empty")
 	}
 
-	var chanks_amount int64 = (sumlen + chank_len - 1) / chank_len
+	chunkLen := calcChunkLen(sumlen)
+	chunksAmount := (sumlen + chunkLen - 1) / chunkLen
 
-	chanks := make([][]byte, chanks_amount)
-	hashed_chanks := make([][sha1.Size]byte, chanks_amount)
+	hashedChunks := make([][sha1.Size]byte, chunksAmount)
 
-	for i := range chanks {
-		chanks[i] = make([]byte, chank_len)
-	}
+	// Итерируемся по всем байтам через виртуальный "поток":
+	// globalPos — текущая позиция в конкатенированном потоке байт
+	var globalPos int64 = 0
 
-	var chank_idx int64 = 0
-	var cur_shift_in_file int64 = 0
-	// заполняем чанки
-	for file_idx, file := range files {
-		var file_len int64 = int64(len(file))
-		for cur_shift_in_file < int64(len(file)) {
-			if file_len-cur_shift_in_file < chank_len {
-				copy(chanks[chank_idx], file[cur_shift_in_file:])
-				if file_idx < int(files_amount)-1 {
-					var filled int64 = file_len - cur_shift_in_file
-					copy(chanks[chank_idx][filled:], files[file_idx+1][:chank_len-filled])
-					cur_shift_in_file = chank_len - filled
-				}
-			} else {
-				copy(chanks[chank_idx], file[cur_shift_in_file:cur_shift_in_file+chank_len])
-				cur_shift_in_file += chank_len
+	// readByte возвращает байт по глобальной позиции в конкатенированном потоке
+	readByte := func(pos int64) byte {
+		for _, file := range files {
+			flen := int64(len(file))
+			if pos < flen {
+				return file[pos]
 			}
+			pos -= flen
+		}
+		// не должно случиться, если pos < sumlen
+		return 0
+	}
 
+	for chunkIdx := int64(0); chunkIdx < chunksAmount; chunkIdx++ {
+		// размер текущего чанка (последний может быть меньше)
+		remaining := sumlen - globalPos
+		curChunkLen := chunkLen
+		if remaining < chunkLen {
+			curChunkLen = remaining
 		}
 
-	}
-
-	for idx := range hashed_chanks {
-		var err error
-		hashed_chanks[idx], err = c.get_chunk_hash(chanks[idx])
-		if err != nil {
-			panic(err)
+		chunk := make([]byte, curChunkLen)
+		for i := int64(0); i < curChunkLen; i++ {
+			chunk[i] = readByte(globalPos)
+			globalPos++
 		}
+
+		hashedChunks[chunkIdx] = sha1.Sum(chunk)
 	}
 
-	// тут будем собирать уже наш файлик
-	//пока так:
-	return []byte{}, nil
-
+	return hashedChunks, nil
 }
-
-func (c *Codec) get_chunk_hash(chank []byte) ([sha1.Size]byte, error) {
-	ret := sha1.Sum(chank)
-	return ret, nil
-}
-
-/*
-// возвращать будет байты манифест файла
-func (c *Codec) Encode(files []os.File) ([]byte, error) {
-	sumlen := 0
-	for file := range files {
-		statistics := file.Stat()
-
-		length := statistics.Size()
-
-		sumlen += length
-	}
-	return make([]byte, sumlen), nil
-
-}
-*/

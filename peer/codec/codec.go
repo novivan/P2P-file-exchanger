@@ -8,42 +8,29 @@ import (
 	"github.com/google/uuid"
 )
 
-// в файлах будет 4 типа данных как в .torrent (классика):
-// 1) массив байт (например, строки)
-// 2) число
-// 3) список
-// 4) ассоциативный массив (словарь)
-
 type Codec struct{}
 
 type FileMeta struct {
-	len  int64    // размер файла (все размеры в байтах)
-	path []string // элементы пути, разделенные слешем от корневой директории
+	Len  int64    // размер файла в байтах
+	Path []string // элементы пути от корневой директории
 }
 
 type Info struct {
-	piece_length int64
-	pieces       [][sha1.Size]byte // хеши чанков
-	name         string            // рекомендуемое имя файла (или папки, если манифест создавался из папки)
-	length       int64             // если файл один, то длина файла в байтах (иначе ничего)
-	files        []FileMeta        // если файлов несколько
+	PieceLength int64             // размер одного чанка в байтах
+	Pieces      [][sha1.Size]byte // SHA-1 хеши всех чанков
+	Name        string            // рекомендуемое имя файла или папки
+	Length      int64             // длина файла в байтах (только если файл один)
+	Files       []FileMeta        // метаданные файлов (если файлов несколько)
 }
 
 type ManifestFile struct {
-	info          Info      // информация о файлах
-	announce_list []string  // список url'ов трекеров (пока планируется только один)
-	creation_date time.Time // timestamp создания
-	comment       string    // любой комментарий
-	created_by    uuid.UUID // id пира
+	Info         Info      // информация о файлах и чанках
+	AnnounceList []string  // список URL трекеров
+	CreationDate time.Time // время создания манифеста
+	Comment      string    // произвольный комментарий
+	CreatedBy    uuid.UUID // UUID пира, создавшего манифест
 }
 
-func (c *Codec) Say_hi() error {
-	fmt.Println("Codec says \"Hi!\"")
-	return nil
-}
-
-// calcChunkLen вычисляет размер чанка: минимальная степень двойки такая,
-// что чанков получается не более 1024 штук (как в BitTorrent — piece size >= sumlen/1024).
 func calcChunkLen(sumlen int64) int64 {
 	if sumlen == 0 {
 		return 1
@@ -55,36 +42,25 @@ func calcChunkLen(sumlen int64) int64 {
 	return chunkLen
 }
 
-// Encode принимает содержимое файлов в виде срезов байт,
-// разбивает их на чанки фиксированного размера (файлы конкатенируются),
-// хеширует каждый чанк через SHA-1 и возвращает срез хешей.
-//
-// Последний чанк может быть короче остальных — он хешируется по реальной длине,
-// без нулевого паддинга.
-func (c *Codec) Encode(files [][]byte) ([][sha1.Size]byte, error) {
+// сливаем файлы в поток байт, разбиваем на чанки, хешируем
+func (c *Codec) encode(files [][]byte) ([][sha1.Size]byte, int64, error) {
 	if len(files) == 0 {
-		return nil, fmt.Errorf("encode: no files provided")
+		return nil, 0, fmt.Errorf("encode: no files provided")
 	}
 
-	// считаем суммарный размер
 	var sumlen int64 = 0
 	for _, file := range files {
 		sumlen += int64(len(file))
 	}
 	if sumlen == 0 {
-		return nil, fmt.Errorf("encode: all files are empty")
+		return nil, 0, fmt.Errorf("encode: all files are empty")
 	}
 
 	chunkLen := calcChunkLen(sumlen)
 	chunksAmount := (sumlen + chunkLen - 1) / chunkLen
-
 	hashedChunks := make([][sha1.Size]byte, chunksAmount)
 
-	// Итерируемся по всем байтам через виртуальный "поток":
-	// globalPos — текущая позиция в конкатенированном потоке байт
-	var globalPos int64 = 0
-
-	// readByte возвращает байт по глобальной позиции в конкатенированном потоке
+	// байт по глобальной позиции в общем потоке
 	readByte := func(pos int64) byte {
 		for _, file := range files {
 			flen := int64(len(file))
@@ -93,12 +69,11 @@ func (c *Codec) Encode(files [][]byte) ([][sha1.Size]byte, error) {
 			}
 			pos -= flen
 		}
-		// не должно случиться, если pos < sumlen
 		return 0
 	}
 
+	var globalPos int64 = 0
 	for chunkIdx := int64(0); chunkIdx < chunksAmount; chunkIdx++ {
-		// размер текущего чанка (последний может быть меньше)
 		remaining := sumlen - globalPos
 		curChunkLen := chunkLen
 		if remaining < chunkLen {
@@ -110,9 +85,49 @@ func (c *Codec) Encode(files [][]byte) ([][sha1.Size]byte, error) {
 			chunk[i] = readByte(globalPos)
 			globalPos++
 		}
-
 		hashedChunks[chunkIdx] = sha1.Sum(chunk)
 	}
 
-	return hashedChunks, nil
+	return hashedChunks, chunkLen, nil
+}
+
+func (c *Codec) BuildManifest(
+	files [][]byte, 		// содержимое файлов в виде срезов байт
+	filePaths [][]string, 	// пути к файлам. Если файл один, оставим пустым
+	name string, 			// рекомендуемое имя файла или папки
+	trackers []string, 		// список URL трекеров
+	comment string, 		// произвольный комментарий
+	createdBy uuid.UUID, 	// UUID пира, создающего манифест
+) (ManifestFile, error) {
+	hashes, chunkLen, err := c.encode(files)
+	if err != nil {
+		return ManifestFile{}, fmt.Errorf("BuildManifest: %w", err)
+	}
+
+	info := Info{
+		PieceLength: chunkLen,
+		Pieces:      hashes,
+		Name:        name,
+	}
+
+	if len(files) == 1 {
+		info.Length = int64(len(files[0]))
+	} else {
+		info.Files = make([]FileMeta, len(files))
+		for i, file := range files {
+			meta := FileMeta{Len: int64(len(file))}
+			if filePaths != nil && i < len(filePaths) {
+				meta.Path = filePaths[i]
+			}
+			info.Files[i] = meta
+		}
+	}
+
+	return ManifestFile{
+		Info:         info,
+		AnnounceList: trackers,
+		CreationDate: time.Now().UTC(),
+		Comment:      comment,
+		CreatedBy:    createdBy,
+	}, nil
 }

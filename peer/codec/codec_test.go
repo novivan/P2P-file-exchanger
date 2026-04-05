@@ -3,8 +3,12 @@ package codec
 import (
 	"crypto/sha1"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 )
 
+// makeBytes создаёт срез байт заданной длины, заполненный значением val
 func makeBytes(length int, val byte) []byte {
 	b := make([]byte, length)
 	for i := range b {
@@ -13,15 +17,14 @@ func makeBytes(length int, val byte) []byte {
 	return b
 }
 
+// sha1Of возвращает SHA-1 хеш переданных байт
 func sha1Of(data []byte) [sha1.Size]byte {
 	return sha1.Sum(data)
 }
 
-// --- tests ---
-
 func TestEncodeNoFiles(t *testing.T) {
 	c := &Codec{}
-	_, err := c.Encode([][]byte{})
+	_, _, err := c.encode([][]byte{})
 	if err == nil {
 		t.Fatal("expected error for empty files list, got nil")
 	}
@@ -29,7 +32,7 @@ func TestEncodeNoFiles(t *testing.T) {
 
 func TestEncodeAllEmpty(t *testing.T) {
 	c := &Codec{}
-	_, err := c.Encode([][]byte{{}, {}})
+	_, _, err := c.encode([][]byte{{}, {}})
 	if err == nil {
 		t.Fatal("expected error for all-empty files, got nil")
 	}
@@ -38,10 +41,11 @@ func TestEncodeAllEmpty(t *testing.T) {
 func TestEncodeSingleSmallFile(t *testing.T) {
 	c := &Codec{}
 	data := []byte("hello, world!")
-	hashes, err := c.Encode([][]byte{data})
+	hashes, _, err := c.encode([][]byte{data})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// 13 байт / chunkLen=1 = 13 чанков
 	if len(hashes) != 13 {
 		t.Fatalf("expected 13 chunks, got %d", len(hashes))
 	}
@@ -56,10 +60,11 @@ func TestEncodeSingleSmallFile(t *testing.T) {
 func TestEncodeExactlyOneChunk(t *testing.T) {
 	c := &Codec{}
 	data := makeBytes(1024, 0xAB)
-	hashes, err := c.Encode([][]byte{data})
+	hashes, _, err := c.encode([][]byte{data})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// 1024 байта / chunkLen=1 = 1024 чанка
 	if len(hashes) != 1024 {
 		t.Fatalf("expected 1024 chunks, got %d", len(hashes))
 	}
@@ -74,18 +79,16 @@ func TestEncodeExactlyOneChunk(t *testing.T) {
 func TestEncodeManyChunks(t *testing.T) {
 	c := &Codec{}
 	data := makeBytes(3000, 0x01)
-	hashes, err := c.Encode([][]byte{data})
+	hashes, chunkLen, err := c.encode([][]byte{data})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	chunkLen := calcChunkLen(3000)
-	expectedChunks := (3000 + chunkLen - 1) / chunkLen
+	expectedChunks := (int64(3000) + chunkLen - 1) / chunkLen
 	if int64(len(hashes)) != expectedChunks {
 		t.Fatalf("expected %d chunks, got %d", expectedChunks, len(hashes))
 	}
 
-	// проверяем каждый хеш вручную
 	for i := int64(0); i < expectedChunks; i++ {
 		start := i * chunkLen
 		end := start + chunkLen
@@ -104,13 +107,12 @@ func TestEncodeMultipleFiles(t *testing.T) {
 	file1 := []byte{0x01, 0x02, 0x03}
 	file2 := []byte{0x04, 0x05, 0x06}
 
-	hashes, err := c.Encode([][]byte{file1, file2})
+	hashes, chunkLen, err := c.encode([][]byte{file1, file2})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	combined := append(file1, file2...)
-	chunkLen := calcChunkLen(int64(len(combined)))
 	expectedChunks := (int64(len(combined)) + chunkLen - 1) / chunkLen
 
 	if int64(len(hashes)) != expectedChunks {
@@ -132,17 +134,15 @@ func TestEncodeMultipleFiles(t *testing.T) {
 
 func TestEncodeChunkBoundary(t *testing.T) {
 	c := &Codec{}
-	half := 1024
-	file1 := makeBytes(half, 0xAA)
-	file2 := makeBytes(half, 0xBB)
+	file1 := makeBytes(1024, 0xAA)
+	file2 := makeBytes(1024, 0xBB)
 
-	hashes, err := c.Encode([][]byte{file1, file2})
+	hashes, chunkLen, err := c.encode([][]byte{file1, file2})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	combined := append(file1, file2...)
-	chunkLen := calcChunkLen(int64(len(combined)))
 	expectedChunks := (int64(len(combined)) + chunkLen - 1) / chunkLen
 
 	if int64(len(hashes)) != expectedChunks {
@@ -165,22 +165,18 @@ func TestEncodeChunkBoundary(t *testing.T) {
 func TestEncodeLastChunkShorter(t *testing.T) {
 	c := &Codec{}
 	data := makeBytes(1025, 0xFF)
-	hashes, err := c.Encode([][]byte{data})
+	hashes, chunkLen, err := c.encode([][]byte{data})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	chunkLen := calcChunkLen(1025)
-	expectedChunks := (1025 + chunkLen - 1) / chunkLen
+	expectedChunks := (int64(1025) + chunkLen - 1) / chunkLen
 	if int64(len(hashes)) != expectedChunks {
 		t.Fatalf("expected %d chunks, got %d", expectedChunks, len(hashes))
 	}
 
-	lastChunk := data[int64(len(data))-1025%chunkLen:]
-	if 1025%chunkLen == 0 {
-		lastChunk = data[int64(len(data))-chunkLen:]
-	}
-	expectedLastHash := sha1Of(lastChunk)
+	lastStart := (expectedChunks - 1) * chunkLen
+	expectedLastHash := sha1Of(data[lastStart:])
 	if hashes[len(hashes)-1] != expectedLastHash {
 		t.Errorf("last chunk hash mismatch:\n  got  %x\n  want %x", hashes[len(hashes)-1], expectedLastHash)
 	}
@@ -207,6 +203,241 @@ func TestCalcChunkLen(t *testing.T) {
 		got := calcChunkLen(tc.sumlen)
 		if got != tc.expected {
 			t.Errorf("calcChunkLen(%d) = %d, want %d", tc.sumlen, got, tc.expected)
+		}
+	}
+}
+
+func TestBuildManifestSingleFile(t *testing.T) {
+	c := &Codec{}
+	data := []byte("hello, world!")
+	id := uuid.New()
+
+	m, err := c.BuildManifest(
+		[][]byte{data},
+		nil,
+		"test.txt",
+		[]string{"http://tracker:8080"},
+		"test comment",
+		id,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if m.Info.Name != "test.txt" {
+		t.Errorf("Name: got %q, want %q", m.Info.Name, "test.txt")
+	}
+	if m.Info.Length != int64(len(data)) {
+		t.Errorf("Length: got %d, want %d", m.Info.Length, len(data))
+	}
+	if len(m.Info.Files) != 0 {
+		t.Errorf("Files: expected empty for single file, got %d entries", len(m.Info.Files))
+	}
+	if len(m.AnnounceList) != 1 || m.AnnounceList[0] != "http://tracker:8080" {
+		t.Errorf("AnnounceList: got %v", m.AnnounceList)
+	}
+	if m.Comment != "test comment" {
+		t.Errorf("Comment: got %q, want %q", m.Comment, "test comment")
+	}
+	if m.CreatedBy != id {
+		t.Errorf("CreatedBy: got %v, want %v", m.CreatedBy, id)
+	}
+	if m.Info.PieceLength <= 0 {
+		t.Errorf("PieceLength: got %d, expected > 0", m.Info.PieceLength)
+	}
+	if len(m.Info.Pieces) == 0 {
+		t.Error("Pieces: expected non-empty")
+	}
+	if time.Since(m.CreationDate) > 5*time.Second {
+		t.Errorf("CreationDate: too old: %v", m.CreationDate)
+	}
+}
+
+func TestBuildManifestMultipleFiles(t *testing.T) {
+	c := &Codec{}
+	file1 := []byte("first file content")
+	file2 := []byte("second file content")
+	id := uuid.New()
+
+	paths := [][]string{
+		{"dir", "file1.txt"},
+		{"dir", "file2.txt"},
+	}
+
+	m, err := c.BuildManifest(
+		[][]byte{file1, file2},
+		paths,
+		"mydir",
+		[]string{"http://tracker:8080"},
+		"",
+		id,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if m.Info.Length != 0 {
+		t.Errorf("Length: expected 0 for multi-file, got %d", m.Info.Length)
+	}
+	if len(m.Info.Files) != 2 {
+		t.Fatalf("Files: expected 2, got %d", len(m.Info.Files))
+	}
+	if m.Info.Files[0].Len != int64(len(file1)) {
+		t.Errorf("Files[0].Len: got %d, want %d", m.Info.Files[0].Len, len(file1))
+	}
+	if m.Info.Files[1].Len != int64(len(file2)) {
+		t.Errorf("Files[1].Len: got %d, want %d", m.Info.Files[1].Len, len(file2))
+	}
+	if len(m.Info.Files[0].Path) != 2 || m.Info.Files[0].Path[1] != "file1.txt" {
+		t.Errorf("Files[0].Path: got %v", m.Info.Files[0].Path)
+	}
+}
+
+func TestBuildManifestPiecesMatchEncode(t *testing.T) {
+	c := &Codec{}
+	data := makeBytes(5000, 0x42)
+	id := uuid.New()
+
+	m, err := c.BuildManifest([][]byte{data}, nil, "big.bin", nil, "", id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedHashes, expectedChunkLen, err := c.encode([][]byte{data})
+	if err != nil {
+		t.Fatalf("encode error: %v", err)
+	}
+
+	if m.Info.PieceLength != expectedChunkLen {
+		t.Errorf("PieceLength: got %d, want %d", m.Info.PieceLength, expectedChunkLen)
+	}
+	if len(m.Info.Pieces) != len(expectedHashes) {
+		t.Fatalf("Pieces count: got %d, want %d", len(m.Info.Pieces), len(expectedHashes))
+	}
+	for i := range expectedHashes {
+		if m.Info.Pieces[i] != expectedHashes[i] {
+			t.Errorf("Pieces[%d]: got %x, want %x", i, m.Info.Pieces[i], expectedHashes[i])
+		}
+	}
+}
+
+func TestMarshalUnmarshalRoundtrip(t *testing.T) {
+	c := &Codec{}
+	data := []byte("roundtrip test data")
+	id := uuid.New()
+
+	original, err := c.BuildManifest(
+		[][]byte{data},
+		nil,
+		"roundtrip.txt",
+		[]string{"http://tracker1:8080", "http://tracker2:9090"},
+		"some comment",
+		id,
+	)
+	if err != nil {
+		t.Fatalf("BuildManifest error: %v", err)
+	}
+
+	encoded, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+
+	decoded, err := Unmarshal(encoded)
+	if err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+
+	// проверяем поля
+	if decoded.Info.Name != original.Info.Name {
+		t.Errorf("Name: got %q, want %q", decoded.Info.Name, original.Info.Name)
+	}
+	if decoded.Info.Length != original.Info.Length {
+		t.Errorf("Length: got %d, want %d", decoded.Info.Length, original.Info.Length)
+	}
+	if decoded.Info.PieceLength != original.Info.PieceLength {
+		t.Errorf("PieceLength: got %d, want %d", decoded.Info.PieceLength, original.Info.PieceLength)
+	}
+	if decoded.Comment != original.Comment {
+		t.Errorf("Comment: got %q, want %q", decoded.Comment, original.Comment)
+	}
+	if decoded.CreatedBy != original.CreatedBy {
+		t.Errorf("CreatedBy: got %v, want %v", decoded.CreatedBy, original.CreatedBy)
+	}
+	if decoded.CreationDate.Unix() != original.CreationDate.Unix() {
+		t.Errorf("CreationDate: got %v, want %v", decoded.CreationDate, original.CreationDate)
+	}
+	if len(decoded.AnnounceList) != len(original.AnnounceList) {
+		t.Fatalf("AnnounceList len: got %d, want %d", len(decoded.AnnounceList), len(original.AnnounceList))
+	}
+	for i := range original.AnnounceList {
+		if decoded.AnnounceList[i] != original.AnnounceList[i] {
+			t.Errorf("AnnounceList[%d]: got %q, want %q", i, decoded.AnnounceList[i], original.AnnounceList[i])
+		}
+	}
+	if len(decoded.Info.Pieces) != len(original.Info.Pieces) {
+		t.Fatalf("Pieces count: got %d, want %d", len(decoded.Info.Pieces), len(original.Info.Pieces))
+	}
+	for i := range original.Info.Pieces {
+		if decoded.Info.Pieces[i] != original.Info.Pieces[i] {
+			t.Errorf("Pieces[%d]: got %x, want %x", i, decoded.Info.Pieces[i], original.Info.Pieces[i])
+		}
+	}
+}
+
+func TestMarshalUnmarshalMultipleFiles(t *testing.T) {
+	c := &Codec{}
+	file1 := []byte("content of file one")
+	file2 := []byte("content of file two")
+	id := uuid.New()
+
+	original, err := c.BuildManifest(
+		[][]byte{file1, file2},
+		[][]string{{"a", "file1.txt"}, {"a", "file2.txt"}},
+		"mydir",
+		[]string{"http://tracker:8080"},
+		"",
+		id,
+	)
+	if err != nil {
+		t.Fatalf("BuildManifest error: %v", err)
+	}
+
+	encoded, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+
+	decoded, err := Unmarshal(encoded)
+	if err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+
+	if len(decoded.Info.Files) != 2 {
+		t.Fatalf("Files count: got %d, want 2", len(decoded.Info.Files))
+	}
+	if decoded.Info.Files[0].Len != int64(len(file1)) {
+		t.Errorf("Files[0].Len: got %d, want %d", decoded.Info.Files[0].Len, len(file1))
+	}
+	if decoded.Info.Files[1].Len != int64(len(file2)) {
+		t.Errorf("Files[1].Len: got %d, want %d", decoded.Info.Files[1].Len, len(file2))
+	}
+	if len(decoded.Info.Files[0].Path) != 2 || decoded.Info.Files[0].Path[1] != "file1.txt" {
+		t.Errorf("Files[0].Path: got %v", decoded.Info.Files[0].Path)
+	}
+}
+
+func TestUnmarshalInvalidData(t *testing.T) {
+	cases := [][]byte{
+		{},
+		[]byte("not bencode"),
+		[]byte("i42"),    // незакрытый integer
+		[]byte("5:hi"),   // строка вместо словаря
+	}
+	for _, data := range cases {
+		_, err := Unmarshal(data)
+		if err == nil {
+			t.Errorf("expected error for input %q, got nil", data)
 		}
 	}
 }

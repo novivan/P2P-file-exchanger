@@ -210,20 +210,25 @@ func TestCalcChunkLen(t *testing.T) {
 func TestBuildManifestSingleFile(t *testing.T) {
 	c := &Codec{}
 	data := []byte("hello, world!")
-	id := uuid.New()
+	manifestID := uuid.New()
+	peerID := uuid.New()
 
 	m, err := c.BuildManifest(
+		manifestID,
 		[][]byte{data},
 		nil,
 		"test.txt",
 		[]string{"http://tracker:8080"},
 		"test comment",
-		id,
+		peerID,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if m.ID != manifestID {
+		t.Errorf("ID: got %v, want %v", m.ID, manifestID)
+	}
 	if m.Info.Name != "test.txt" {
 		t.Errorf("Name: got %q, want %q", m.Info.Name, "test.txt")
 	}
@@ -239,8 +244,8 @@ func TestBuildManifestSingleFile(t *testing.T) {
 	if m.Comment != "test comment" {
 		t.Errorf("Comment: got %q, want %q", m.Comment, "test comment")
 	}
-	if m.CreatedBy != id {
-		t.Errorf("CreatedBy: got %v, want %v", m.CreatedBy, id)
+	if m.CreatedBy != peerID {
+		t.Errorf("CreatedBy: got %v, want %v", m.CreatedBy, peerID)
 	}
 	if m.Info.PieceLength <= 0 {
 		t.Errorf("PieceLength: got %d, expected > 0", m.Info.PieceLength)
@@ -257,7 +262,8 @@ func TestBuildManifestMultipleFiles(t *testing.T) {
 	c := &Codec{}
 	file1 := []byte("first file content")
 	file2 := []byte("second file content")
-	id := uuid.New()
+	manifestID := uuid.New()
+	peerID := uuid.New()
 
 	paths := [][]string{
 		{"dir", "file1.txt"},
@@ -265,12 +271,13 @@ func TestBuildManifestMultipleFiles(t *testing.T) {
 	}
 
 	m, err := c.BuildManifest(
+		manifestID,
 		[][]byte{file1, file2},
 		paths,
 		"mydir",
 		[]string{"http://tracker:8080"},
 		"",
-		id,
+		peerID,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -296,9 +303,10 @@ func TestBuildManifestMultipleFiles(t *testing.T) {
 func TestBuildManifestPiecesMatchEncode(t *testing.T) {
 	c := &Codec{}
 	data := makeBytes(5000, 0x42)
-	id := uuid.New()
+	manifestID := uuid.New()
+	peerID := uuid.New()
 
-	m, err := c.BuildManifest([][]byte{data}, nil, "big.bin", nil, "", id)
+	m, err := c.BuildManifest(manifestID, [][]byte{data}, nil, "big.bin", nil, "", peerID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -324,15 +332,17 @@ func TestBuildManifestPiecesMatchEncode(t *testing.T) {
 func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 	c := &Codec{}
 	data := []byte("roundtrip test data")
-	id := uuid.New()
+	manifestID := uuid.New()
+	peerID := uuid.New()
 
 	original, err := c.BuildManifest(
+		manifestID,
 		[][]byte{data},
 		nil,
 		"roundtrip.txt",
 		[]string{"http://tracker1:8080", "http://tracker2:9090"},
 		"some comment",
-		id,
+		peerID,
 	)
 	if err != nil {
 		t.Fatalf("BuildManifest error: %v", err)
@@ -360,6 +370,9 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 	}
 	if decoded.Comment != original.Comment {
 		t.Errorf("Comment: got %q, want %q", decoded.Comment, original.Comment)
+	}
+	if decoded.ID != original.ID {
+		t.Errorf("ID: got %v, want %v", decoded.ID, original.ID)
 	}
 	if decoded.CreatedBy != original.CreatedBy {
 		t.Errorf("CreatedBy: got %v, want %v", decoded.CreatedBy, original.CreatedBy)
@@ -389,15 +402,17 @@ func TestMarshalUnmarshalMultipleFiles(t *testing.T) {
 	c := &Codec{}
 	file1 := []byte("content of file one")
 	file2 := []byte("content of file two")
-	id := uuid.New()
+	manifestID := uuid.New()
+	peerID := uuid.New()
 
 	original, err := c.BuildManifest(
+		manifestID,
 		[][]byte{file1, file2},
 		[][]string{{"a", "file1.txt"}, {"a", "file2.txt"}},
 		"mydir",
 		[]string{"http://tracker:8080"},
 		"",
-		id,
+		peerID,
 	)
 	if err != nil {
 		t.Fatalf("BuildManifest error: %v", err)

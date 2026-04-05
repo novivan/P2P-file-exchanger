@@ -43,6 +43,10 @@ func Marshal(m ManifestFile) ([]byte, error) {
 	buf.Write(bencodeKey("creation date"))
 	buf.Write(bencodeInt(m.CreationDate.Unix()))
 
+	// UUID манифеста; "id" лексикографически между "creation date" и "info"
+	buf.Write(bencodeKey("id"))
+	buf.Write(bencodeStr(m.ID.String()))
+
 	buf.Write(bencodeKey("info"))
 	infoBytes, err := marshalInfo(m.Info)
 	if err != nil {
@@ -146,6 +150,16 @@ func Unmarshal(data []byte) (ManifestFile, error) {
 	if v, ok := dict["creation date"]; ok {
 		if ts, ok := v.(int64); ok {
 			m.CreationDate = time.Unix(ts, 0).UTC()
+		}
+	}
+
+	if v, ok := dict["id"]; ok {
+		if b, ok := v.([]byte); ok {
+			id, err := uuid.Parse(string(b))
+			if err != nil {
+				return ManifestFile{}, fmt.Errorf("Unmarshal: invalid manifest id %q: %w", string(b), err)
+			}
+			m.ID = id
 		}
 	}
 

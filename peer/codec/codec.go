@@ -10,6 +10,11 @@ import (
 
 type Codec struct{}
 
+func (c * Codec) Say_hi() error {
+	fmt.Println("Codec says \"Hi\"")
+	return nil
+}
+
 type FileMeta struct {
 	Len  int64    // размер файла в байтах
 	Path []string // элементы пути от корневой директории
@@ -24,6 +29,7 @@ type Info struct {
 }
 
 type ManifestFile struct {
+	ID           uuid.UUID // уникальный идентификатор манифеста, передаётся при создании
 	Info         Info      // информация о файлах и чанках
 	AnnounceList []string  // список URL трекеров
 	CreationDate time.Time // время создания манифеста
@@ -92,12 +98,13 @@ func (c *Codec) encode(files [][]byte) ([][sha1.Size]byte, int64, error) {
 }
 
 func (c *Codec) BuildManifest(
-	files [][]byte, 		// содержимое файлов в виде срезов байт
-	filePaths [][]string, 	// пути к файлам. Если файл один, оставим пустым
-	name string, 			// рекомендуемое имя файла или папки
-	trackers []string, 		// список URL трекеров
-	comment string, 		// произвольный комментарий
-	createdBy uuid.UUID, 	// UUID пира, создающего манифест
+	id uuid.UUID,           // UUID манифеста, генерируется вызывающей стороной
+	files [][]byte,         // содержимое файлов в виде срезов байт
+	filePaths [][]string,   // пути к файлам. Если файл один, оставим пустым
+	name string,            // рекомендуемое имя файла или папки
+	trackers []string,      // список URL трекеров
+	comment string,         // произвольный комментарий
+	createdBy uuid.UUID,    // UUID пира, создающего манифест
 ) (ManifestFile, error) {
 	hashes, chunkLen, err := c.encode(files)
 	if err != nil {
@@ -124,6 +131,7 @@ func (c *Codec) BuildManifest(
 	}
 
 	return ManifestFile{
+		ID:           id,
 		Info:         info,
 		AnnounceList: trackers,
 		CreationDate: time.Now().UTC(),

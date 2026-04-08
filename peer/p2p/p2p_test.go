@@ -8,27 +8,24 @@ import (
 	"github.com/google/uuid"
 )
 
-// ---- InMemoryChunkStore — простое хранилище чанков в памяти для тестов ----
-
-// InMemoryChunkStore хранит чанки в памяти: map[manifestID][chunkIndex] = data
-type InMemoryChunkStore struct {
+type TestInMemoryChunkStore struct {
 	chunks map[uuid.UUID]map[uint32][]byte
 }
 
-func NewInMemoryChunkStore() *InMemoryChunkStore {
-	return &InMemoryChunkStore{
+func NewTestInMemoryChunkStore() *TestInMemoryChunkStore {
+	return &TestInMemoryChunkStore{
 		chunks: make(map[uuid.UUID]map[uint32][]byte),
 	}
 }
 
-func (s *InMemoryChunkStore) AddChunk(manifestID uuid.UUID, chunkIndex uint32, data []byte) {
+func (s *TestInMemoryChunkStore) AddChunk(manifestID uuid.UUID, chunkIndex uint32, data []byte) {
 	if _, ok := s.chunks[manifestID]; !ok {
 		s.chunks[manifestID] = make(map[uint32][]byte)
 	}
 	s.chunks[manifestID][chunkIndex] = data
 }
 
-func (s *InMemoryChunkStore) GetChunk(manifestID uuid.UUID, chunkIndex uint32) ([]byte, error) {
+func (s *TestInMemoryChunkStore) GetChunk(manifestID uuid.UUID, chunkIndex uint32) ([]byte, error) {
 	manifest, ok := s.chunks[manifestID]
 	if !ok {
 		return nil, fmt.Errorf("GetChunk: manifest %v not found", manifestID)
@@ -40,15 +37,12 @@ func (s *InMemoryChunkStore) GetChunk(manifestID uuid.UUID, chunkIndex uint32) (
 	return chunk, nil
 }
 
-// ---- тесты -----------------------------------------------------------------
-
-// TestRequestSingleChunk — базовый тест: seeder отдаёт один чанк, leecher получает его.
 func TestRequestSingleChunk(t *testing.T) {
 	manifestID := uuid.New()
 	chunkData := []byte("hello from chunk zero")
 	chunkIndex := uint32(0)
 
-	store := NewInMemoryChunkStore()
+	store := NewTestInMemoryChunkStore()
 	store.AddChunk(manifestID, chunkIndex, chunkData)
 
 	// запускаем seeder на случайном порту (":0" — ОС выберет свободный)
@@ -73,17 +67,14 @@ func TestRequestSingleChunk(t *testing.T) {
 	}
 }
 
-// TestRequestChunkVerifySHA1 — leecher получает чанк и верифицирует его SHA-1 хеш.
-// Это ключевая проверка целостности данных в P2P-обмене.
 func TestRequestChunkVerifySHA1(t *testing.T) {
 	manifestID := uuid.New()
 	chunkData := []byte("this chunk will be verified by sha1 hash")
 	chunkIndex := uint32(3)
 
-	// seeder знает хеш заранее (из манифеста)
 	expectedHash := sha1.Sum(chunkData)
 
-	store := NewInMemoryChunkStore()
+	store := NewTestInMemoryChunkStore()
 	store.AddChunk(manifestID, chunkIndex, chunkData)
 
 	seeder, err := NewSeeder(":0", store)
@@ -99,7 +90,6 @@ func TestRequestChunkVerifySHA1(t *testing.T) {
 		t.Fatalf("RequestChunk error: %v", err)
 	}
 
-	// leecher верифицирует хеш полученного чанка
 	actualHash := sha1.Sum(received)
 	if actualHash != expectedHash {
 		t.Errorf("SHA-1 verification failed:\n  got  %x\n  want %x", actualHash, expectedHash)
@@ -108,8 +98,7 @@ func TestRequestChunkVerifySHA1(t *testing.T) {
 
 // TestRequestChunkNotFound — запрос несуществующего чанка должен вернуть ошибку.
 func TestRequestChunkNotFound(t *testing.T) {
-	store := NewInMemoryChunkStore()
-	// хранилище пустое — ни одного чанка
+	store := NewTestInMemoryChunkStore()
 
 	seeder, err := NewSeeder(":0", store)
 	if err != nil {
@@ -135,7 +124,7 @@ func TestRequestMultipleChunksSequentially(t *testing.T) {
 		[]byte("chunk number two"),
 	}
 
-	store := NewInMemoryChunkStore()
+	store := NewTestInMemoryChunkStore()
 	for i, data := range chunks {
 		store.AddChunk(manifestID, uint32(i), data)
 	}
@@ -175,7 +164,7 @@ func TestRequestChunksFromTwoManifests(t *testing.T) {
 	manifestA := uuid.New()
 	manifestB := uuid.New()
 
-	store := NewInMemoryChunkStore()
+	store := NewTestInMemoryChunkStore()
 	store.AddChunk(manifestA, 0, []byte("manifest A, chunk 0"))
 	store.AddChunk(manifestB, 0, []byte("manifest B, chunk 0"))
 
@@ -208,14 +197,13 @@ func TestRequestChunksFromTwoManifests(t *testing.T) {
 // TestRequestBinaryChunk — чанк с бинарными данными (не только ASCII).
 func TestRequestBinaryChunk(t *testing.T) {
 	manifestID := uuid.New()
-	// бинарные данные: все возможные байты 0x00..0xFF
 	chunkData := make([]byte, 256)
 	for i := range chunkData {
 		chunkData[i] = byte(i)
 	}
 	expectedHash := sha1.Sum(chunkData)
 
-	store := NewInMemoryChunkStore()
+	store := NewTestInMemoryChunkStore()
 	store.AddChunk(manifestID, 0, chunkData)
 
 	seeder, err := NewSeeder(":0", store)

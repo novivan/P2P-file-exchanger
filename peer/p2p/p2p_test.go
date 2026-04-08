@@ -2,30 +2,25 @@ package p2p
 
 import (
 	"crypto/sha1"
-	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 )
 
-type TestInMemoryChunkStore struct {
-	chunks map[uuid.UUID]map[uint32][]byte
-}
-
-func NewTestInMemoryChunkStore() *TestInMemoryChunkStore {
-	return &TestInMemoryChunkStore{
+func NewTestInMemoryChunkStore() *InMemoryChunkStore {
+	return &InMemoryChunkStore{
 		chunks: make(map[uuid.UUID]map[uint32][]byte),
 	}
 }
 
-func (s *TestInMemoryChunkStore) AddChunk(manifestID uuid.UUID, chunkIndex uint32, data []byte) {
+func (s *InMemoryChunkStore) AddChunk(manifestID uuid.UUID, chunkIndex uint32, data []byte) {
 	if _, ok := s.chunks[manifestID]; !ok {
 		s.chunks[manifestID] = make(map[uint32][]byte)
 	}
 	s.chunks[manifestID][chunkIndex] = data
 }
 
-func (s *TestInMemoryChunkStore) GetChunk(manifestID uuid.UUID, chunkIndex uint32) ([]byte, error) {
+/*func (s *InMemoryChunkStore) GetChunk(manifestID uuid.UUID, chunkIndex uint32) ([]byte, error) {
 	manifest, ok := s.chunks[manifestID]
 	if !ok {
 		return nil, fmt.Errorf("GetChunk: manifest %v not found", manifestID)
@@ -35,7 +30,7 @@ func (s *TestInMemoryChunkStore) GetChunk(manifestID uuid.UUID, chunkIndex uint3
 		return nil, fmt.Errorf("GetChunk: chunk %d not found in manifest %v", chunkIndex, manifestID)
 	}
 	return chunk, nil
-}
+}*/
 
 func TestRequestSingleChunk(t *testing.T) {
 	manifestID := uuid.New()

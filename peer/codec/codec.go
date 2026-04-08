@@ -10,7 +10,7 @@ import (
 
 type Codec struct{}
 
-func (c * Codec) Say_hi() error {
+func (c *Codec) Say_hi() error {
 	fmt.Println("Codec says \"Hi\"")
 	return nil
 }
@@ -98,13 +98,13 @@ func (c *Codec) encode(files [][]byte) ([][sha1.Size]byte, int64, error) {
 }
 
 func (c *Codec) BuildManifest(
-	id uuid.UUID,           // UUID манифеста, генерируется вызывающей стороной
-	files [][]byte,         // содержимое файлов в виде срезов байт
-	filePaths [][]string,   // пути к файлам. Если файл один, оставим пустым
-	name string,            // рекомендуемое имя файла или папки
-	trackers []string,      // список URL трекеров
-	comment string,         // произвольный комментарий
-	createdBy uuid.UUID,    // UUID пира, создающего манифест
+	id uuid.UUID,
+	files [][]byte,
+	filePaths [][]string,
+	name string,
+	trackers []string,
+	comment string,
+	createdBy uuid.UUID,
 ) (ManifestFile, error) {
 	hashes, chunkLen, err := c.encode(files)
 	if err != nil {
@@ -138,4 +138,53 @@ func (c *Codec) BuildManifest(
 		Comment:      comment,
 		CreatedBy:    createdBy,
 	}, nil
+}
+
+func (c *Codec) Decode(chunks [][]byte, fileLengths []int64) ([][]byte, error) {
+	if len(chunks) == 0 {
+		return nil, fmt.Errorf("Decode: no chunks provided")
+	}
+	if len(fileLengths) == 0 {
+		return nil, fmt.Errorf("Decode: no file lengths provided")
+	}
+
+	var totalChunkBytes int64
+	for _, ch := range chunks {
+		totalChunkBytes += int64(len(ch))
+	}
+
+	var totalFileBytes int64
+	for _, l := range fileLengths {
+		if l < 0 {
+			return nil, fmt.Errorf("Decode: negative file length %d", l)
+		}
+		totalFileBytes += l
+	}
+	if totalFileBytes > totalChunkBytes {
+		return nil, fmt.Errorf("Decode: file lengths sum (%d) exceeds chunk data (%d)", totalFileBytes, totalChunkBytes)
+	}
+
+	readByte := func(pos int64) byte {
+		for _, ch := range chunks {
+			clen := int64(len(ch))
+			if pos < clen {
+				return ch[pos]
+			}
+			pos -= clen
+		}
+		return 0
+	}
+
+	files := make([][]byte, len(fileLengths))
+	var globalPos int64
+	for i, flen := range fileLengths {
+		file := make([]byte, flen)
+		for j := int64(0); j < flen; j++ {
+			file[j] = readByte(globalPos)
+			globalPos++
+		}
+		files[i] = file
+	}
+
+	return files, nil
 }

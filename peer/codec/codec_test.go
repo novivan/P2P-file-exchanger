@@ -446,13 +446,184 @@ func TestUnmarshalInvalidData(t *testing.T) {
 	cases := [][]byte{
 		{},
 		[]byte("not bencode"),
-		[]byte("i42"),    // незакрытый integer
-		[]byte("5:hi"),   // строка вместо словаря
+		[]byte("i42"),
+		[]byte("5:hi"),
 	}
 	for _, data := range cases {
 		_, err := Unmarshal(data)
 		if err == nil {
 			t.Errorf("expected error for input %q, got nil", data)
 		}
+	}
+}
+
+// тесты Decode
+
+func TestDecodeSingleFile(t *testing.T) {
+	c := &Codec{}
+	original := []byte("hello, world!")
+	chunks := [][]byte{original}
+	fileLengths := []int64{int64(len(original))}
+
+	files, err := c.Decode(chunks, fileLengths)
+	if err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+	if string(files[0]) != string(original) {
+		t.Errorf("file content mismatch: got %q, want %q", files[0], original)
+	}
+}
+
+func TestDecodeMultipleChunks(t *testing.T) {
+	c := &Codec{}
+	chunks := [][]byte{[]byte("ABCD"), []byte("EFGH"), []byte("I")}
+	fileLengths := []int64{9}
+
+	files, err := c.Decode(chunks, fileLengths)
+	if err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	if string(files[0]) != "ABCDEFGHI" {
+		t.Errorf("got %q, want %q", files[0], "ABCDEFGHI")
+	}
+}
+
+func TestDecodeMultipleFiles(t *testing.T) {
+	c := &Codec{}
+	chunks := [][]byte{[]byte("AB"), []byte("CD"), []byte("E")}
+	fileLengths := []int64{3, 2}
+
+	files, err := c.Decode(chunks, fileLengths)
+	if err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(files))
+	}
+	if string(files[0]) != "ABC" {
+		t.Errorf("file 0: got %q, want %q", files[0], "ABC")
+	}
+	if string(files[1]) != "DE" {
+		t.Errorf("file 1: got %q, want %q", files[1], "DE")
+	}
+}
+
+func TestDecodeFileSplitAcrossChunkBoundary(t *testing.T) {
+	c := &Codec{}
+	chunks := [][]byte{[]byte("ABCD"), []byte("EF")}
+	fileLengths := []int64{3, 3}
+
+	files, err := c.Decode(chunks, fileLengths)
+	if err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	if string(files[0]) != "ABC" {
+		t.Errorf("file 0: got %q, want %q", files[0], "ABC")
+	}
+	if string(files[1]) != "DEF" {
+		t.Errorf("file 1: got %q, want %q", files[1], "DEF")
+	}
+}
+
+func TestDecodeRoundtrip(t *testing.T) {
+	c := &Codec{}
+	fileA := []byte("The quick brown fox")
+	fileB := []byte("jumps over the lazy dog")
+	files := [][]byte{fileA, fileB}
+
+	manifest, err := c.BuildManifest(
+		uuid.New(), files, nil, "test", nil, "", uuid.New(),
+	)
+	if err != nil {
+		t.Fatalf("BuildManifest: %v", err)
+	}
+
+	chunkLen := manifest.Info.PieceLength
+	var sumLen int64
+	for _, f := range files {
+		sumLen += int64(len(f))
+	}
+	readByte := func(pos int64) byte {
+		for _, f := range files {
+			if pos < int64(len(f)) {
+				return f[pos]
+			}
+			pos -= int64(len(f))
+		}
+		return 0
+	}
+	chunksAmount := (sumLen + chunkLen - 1) / chunkLen
+	chunks := make([][]byte, chunksAmount)
+	var globalPos int64
+	for i := int64(0); i < chunksAmount; i++ {
+		remaining := sumLen - globalPos
+		curLen := chunkLen
+		if remaining < chunkLen {
+			curLen = remaining
+		}
+		chunk := make([]byte, curLen)
+		for j := int64(0); j < curLen; j++ {
+			chunk[j] = readByte(globalPos)
+			globalPos++
+		}
+		chunks[i] = chunk
+	}
+
+	fileLengths := make([]int64, len(manifest.Info.Files))
+	for i, fm := range manifest.Info.Files {
+		fileLengths[i] = fm.Len
+	}
+
+	decoded, err := c.Decode(chunks, fileLengths)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(decoded) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(decoded))
+	}
+	if string(decoded[0]) != string(fileA) {
+		t.Errorf("file A mismatch:\n  got  %q\n  want %q", decoded[0], fileA)
+	}
+	if string(decoded[1]) != string(fileB) {
+		t.Errorf("file B mismatch:\n  got  %q\n  want %q", decoded[1], fileB)
+	}
+}
+
+func TestDecodeNoChunks(t *testing.T) {
+	c := &Codec{}
+	_, err := c.Decode(nil, []int64{5})
+	if err == nil {
+		t.Error("expected error for nil chunks, got nil")
+	}
+	_, err = c.Decode([][]byte{}, []int64{5})
+	if err == nil {
+		t.Error("expected error for empty chunks, got nil")
+	}
+}
+
+func TestDecodeNoFileLengths(t *testing.T) {
+	c := &Codec{}
+	_, err := c.Decode([][]byte{[]byte("data")}, nil)
+	if err == nil {
+		t.Error("expected error for nil fileLengths, got nil")
+	}
+}
+
+func TestDecodeNegativeFileLength(t *testing.T) {
+	c := &Codec{}
+	_, err := c.Decode([][]byte{[]byte("data")}, []int64{-1})
+	if err == nil {
+		t.Error("expected error for negative file length, got nil")
+	}
+}
+
+func TestDecodeFileLengthsExceedChunks(t *testing.T) {
+	c := &Codec{}
+	_, err := c.Decode([][]byte{[]byte("ABCD")}, []int64{10})
+	if err == nil {
+		t.Error("expected error when file lengths exceed chunk data, got nil")
 	}
 }

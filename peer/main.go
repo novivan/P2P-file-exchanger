@@ -1,12 +1,388 @@
 package main
 
 import (
+	"crypto/sha1"
 	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
 	"peer/codec"
+	"peer/p2p"
+	"peer/tracker_client"
 )
 
+type TorrentInfo struct {
+	ManifestID uuid.UUID `json:"manifest_id"`
+	Name       string    `json:"name"`
+	Role       string    `json:"role"` // "seeder" | "leecher" | "done"
+	FilePath   string    `json:"file_path"`
+	TotalLen   int64     `json:"total_len"`
+	ChunkLen   int64     `json:"chunk_len"`
+	Chunks     int       `json:"chunks"`
+}
+
+type PeerServer struct {
+	peerID      uuid.UUID
+	trackerURL  string
+	p2pAddr     string // внешний адрес, нужен для announce
+	downloadDir string
+
+	tracker *tracker_client.Client
+	store   *p2p.DiskChunkStore
+	seeder  *p2p.Seeder
+	codec   *codec.Codec
+
+	mu       sync.RWMutex
+	torrents map[uuid.UUID]*TorrentInfo
+}
+
+func NewPeerServer(trackerURL, p2pListenAddr, p2pExternalAddr, downloadDir string) (*PeerServer, error) {
+	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
+		return nil, fmt.Errorf("NewPeerServer: mkdir %q: %w", downloadDir, err)
+	}
+
+	store := p2p.NewDiskChunkStore()
+
+	seeder, err := p2p.NewSeeder(p2pListenAddr, store)
+	if err != nil {
+		return nil, fmt.Errorf("NewPeerServer: start seeder: %w", err)
+	}
+
+	externalAddr := p2pExternalAddr
+	if externalAddr == "" {
+		externalAddr = seeder.Addr().String()
+	}
+
+	peerID := uuid.New()
+	tracker := tracker_client.NewClient(trackerURL)
+
+	if err := tracker.RegisterPeer(peerID, externalAddr); err != nil {
+		seeder.Close()
+		return nil, fmt.Errorf("NewPeerServer: register on tracker: %w", err)
+	}
+
+	ps := &PeerServer{
+		peerID:      peerID,
+		trackerURL:  trackerURL,
+		p2pAddr:     externalAddr,
+		downloadDir: downloadDir,
+		tracker:     tracker,
+		store:       store,
+		seeder:      seeder,
+		codec:       &codec.Codec{},
+		torrents:    make(map[uuid.UUID]*TorrentInfo),
+	}
+
+	go func() {
+		if err := seeder.Serve(); err != nil {
+			log.Printf("seeder stopped: %v", err)
+		}
+	}()
+
+	return ps, nil
+}
+
+func (ps *PeerServer) Close() error {
+	return ps.seeder.Close()
+}
+
+func (ps *PeerServer) AddSeed(filePath, name string) (*TorrentInfo, error) {
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("AddSeed: abs %q: %w", filePath, err)
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("AddSeed: read %q: %w", absPath, err)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("AddSeed: file %q is empty", absPath)
+	}
+
+	if name == "" {
+		name = filepath.Base(absPath)
+	}
+
+	manifestID := uuid.New()
+	manifest, err := ps.codec.BuildManifest(
+		manifestID,
+		[][]byte{data},
+		nil,
+		name,
+		[]string{ps.trackerURL},
+		"",
+		ps.peerID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("AddSeed: build manifest: %w", err)
+	}
+
+	raw, err := codec.Marshal(manifest)
+	if err != nil {
+		return nil, fmt.Errorf("AddSeed: marshal manifest: %w", err)
+	}
+
+	if err := ps.tracker.UploadManifest(manifestID, name, raw); err != nil {
+		return nil, fmt.Errorf("AddSeed: upload manifest: %w", err)
+	}
+
+	if err := ps.store.Register(manifestID, []string{absPath}, manifest.Info.PieceLength); err != nil {
+		return nil, fmt.Errorf("AddSeed: register in store: %w", err)
+	}
+
+	if err := ps.tracker.Announce(manifestID, ps.peerID); err != nil {
+		return nil, fmt.Errorf("AddSeed: announce: %w", err)
+	}
+
+	info := &TorrentInfo{
+		ManifestID: manifestID,
+		Name:       name,
+		Role:       "seeder",
+		FilePath:   absPath,
+		TotalLen:   int64(len(data)),
+		ChunkLen:   manifest.Info.PieceLength,
+		Chunks:     len(manifest.Info.Pieces),
+	}
+	ps.mu.Lock()
+	ps.torrents[manifestID] = info
+	ps.mu.Unlock()
+
+	return info, nil
+}
+
+func (ps *PeerServer) Download(manifestID uuid.UUID) (*TorrentInfo, error) {
+	raw, err := ps.tracker.GetManifest(manifestID)
+	if err != nil {
+		return nil, fmt.Errorf("Download: get manifest: %w", err)
+	}
+	manifest, err := codec.Unmarshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("Download: unmarshal manifest: %w", err)
+	}
+
+	if len(manifest.Info.Files) > 0 {
+		return nil, fmt.Errorf("Download: multi-file manifests not supported yet")
+	}
+	totalLen := manifest.Info.Length
+	if totalLen <= 0 {
+		return nil, fmt.Errorf("Download: manifest has zero length")
+	}
+
+	name := manifest.Info.Name
+	if name == "" {
+		name = manifestID.String()
+	}
+	savePath := filepath.Join(ps.downloadDir, name)
+
+	peers, err := ps.tracker.GetSeeders(manifestID)
+	if err != nil {
+		return nil, fmt.Errorf("Download: get seeders: %w", err)
+	}
+	if len(peers) == 0 {
+		return nil, fmt.Errorf("Download: no seeders for manifest %s", manifestID)
+	}
+
+	var candidates []string
+	for _, p := range peers {
+		if p.ID == ps.peerID {
+			continue
+		}
+		candidates = append(candidates, p.Address)
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("Download: no external seeders for manifest %s", manifestID)
+	}
+
+	info := &TorrentInfo{
+		ManifestID: manifestID,
+		Name:       name,
+		Role:       "leecher",
+		FilePath:   savePath,
+		TotalLen:   totalLen,
+		ChunkLen:   manifest.Info.PieceLength,
+		Chunks:     len(manifest.Info.Pieces),
+	}
+	ps.mu.Lock()
+	ps.torrents[manifestID] = info
+	ps.mu.Unlock()
+
+	f, err := os.OpenFile(savePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("Download: create %q: %w", savePath, err)
+	}
+	if err := f.Truncate(totalLen); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("Download: truncate %q: %w", savePath, err)
+	}
+
+	chunksAmount := uint32(len(manifest.Info.Pieces))
+	for idx := uint32(0); idx < chunksAmount; idx++ {
+		var chunk []byte
+		var lastErr error
+		for _, addr := range candidates {
+			data, err := p2p.RequestChunk(addr, manifestID, idx)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if sha1.Sum(data) != manifest.Info.Pieces[idx] {
+				lastErr = fmt.Errorf("sha1 mismatch for chunk %d from %s", idx, addr)
+				continue
+			}
+			chunk = data
+			break
+		}
+		if chunk == nil {
+			f.Close()
+			os.Remove(savePath)
+			return nil, fmt.Errorf("Download: chunk %d: %v", idx, lastErr)
+		}
+
+		offset := int64(idx) * manifest.Info.PieceLength
+		if _, err := f.WriteAt(chunk, offset); err != nil {
+			f.Close()
+			os.Remove(savePath)
+			return nil, fmt.Errorf("Download: write chunk %d: %w", idx, err)
+		}
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("Download: sync: %w", err)
+	}
+	f.Close()
+
+	if err := ps.store.Register(manifestID, []string{savePath}, manifest.Info.PieceLength); err != nil {
+		return nil, fmt.Errorf("Download: register for seeding: %w", err)
+	}
+	if err := ps.tracker.Announce(manifestID, ps.peerID); err != nil {
+		log.Printf("Download: announce after download failed: %v", err)
+	}
+
+	ps.mu.Lock()
+	info.Role = "seeder"
+	ps.mu.Unlock()
+
+	return info, nil
+}
+
+func (ps *PeerServer) ListTorrents() []TorrentInfo {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	out := make([]TorrentInfo, 0, len(ps.torrents))
+	for _, t := range ps.torrents {
+		out = append(out, *t)
+	}
+	return out
+}
+
+func (ps *PeerServer) handleHealth(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"peer_id":      ps.peerID,
+		"p2p_addr":     ps.p2pAddr,
+		"tracker":      ps.trackerURL,
+		"download_dir": ps.downloadDir,
+		"torrents":     len(ps.torrents),
+		"time":         time.Now().UTC(),
+	})
+}
+
+func (ps *PeerServer) handleSeed(c *gin.Context) {
+	var body struct {
+		FilePath string `json:"file_path" binding:"required"`
+		Name     string `json:"name"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	info, err := ps.AddSeed(body.FilePath, body.Name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, info)
+}
+
+func (ps *PeerServer) handleDownload(c *gin.Context) {
+	var body struct {
+		ManifestID string `json:"manifest_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	id, err := uuid.Parse(body.ManifestID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid manifest_id: %v", err)})
+		return
+	}
+	info, err := ps.Download(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, info)
+}
+
+func (ps *PeerServer) handleList(c *gin.Context) {
+	c.JSON(http.StatusOK, ps.ListTorrents())
+}
+
+func (ps *PeerServer) handleListRemote(c *gin.Context) {
+	metas, err := ps.tracker.ListManifests()
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, metas)
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
 func main() {
-	fmt.Println("Запускаем клиент(пир)...")
-	codec := codec.Codec{}
-	codec.Say_hi()
+	trackerURL := envOr("TRACKER_URL", "http://localhost:8080")
+	p2pListen := envOr("P2P_ADDR", "127.0.0.1:0")
+	p2pExternal := os.Getenv("P2P_EXTERNAL_ADDR")
+	downloadDir := envOr("DOWNLOAD_DIR", "./downloads")
+	apiAddr := envOr("API_ADDR", "127.0.0.1:9090")
+
+	if p2pExternal == "" {
+		host, port, err := net.SplitHostPort(p2pListen)
+		if err == nil && (host == "0.0.0.0" || host == "") {
+			p2pExternal = net.JoinHostPort("127.0.0.1", port)
+		}
+	}
+
+	ps, err := NewPeerServer(trackerURL, p2pListen, p2pExternal, downloadDir)
+	if err != nil {
+		log.Fatalf("peer: %v", err)
+	}
+	defer ps.Close()
+
+	log.Printf("peer started: id=%s p2p=%s api=%s tracker=%s downloads=%s",
+		ps.peerID, ps.p2pAddr, apiAddr, trackerURL, downloadDir)
+
+	router := gin.Default()
+	router.GET("/health", ps.handleHealth)
+	router.POST("/seed", ps.handleSeed)
+	router.POST("/download", ps.handleDownload)
+	router.GET("/torrents", ps.handleList)
+	router.GET("/manifests", ps.handleListRemote)
+
+	if err := router.Run(apiAddr); err != nil {
+		log.Fatalf("peer api: %v", err)
+	}
 }

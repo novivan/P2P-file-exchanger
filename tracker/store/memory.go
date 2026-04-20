@@ -29,7 +29,7 @@ func NewInMemoryStore() *InMemoryStore {
 	}
 }
 
-func (s *InMemoryStore) SaveManifest(id uuid.UUID, name string, data []byte) error {
+func (s *InMemoryStore) SaveManifest(id uuid.UUID, name, description string, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -38,9 +38,10 @@ func (s *InMemoryStore) SaveManifest(id uuid.UUID, name string, data []byte) err
 
 	s.manifests[id] = stored
 	s.manifestMeta[id] = ManifestMeta{
-		ID:        id,
-		Name:      name,
-		CreatedAt: time.Now().UTC(),
+		ID:          id,
+		Name:        name,
+		Description: description,
+		CreatedAt:   time.Now().UTC(),
 	}
 	return nil
 }
@@ -68,7 +69,6 @@ func (s *InMemoryStore) ListManifests() ([]ManifestMeta, error) {
 	}
 	return result, nil
 }
-
 
 func (s *InMemoryStore) RegisterPeer(peerID uuid.UUID, address string) error {
 	s.mu.Lock()

@@ -7,9 +7,10 @@ import (
 )
 
 type ManifestMeta struct {
-	ID        uuid.UUID
-	Name      string
-	CreatedAt time.Time
+	ID          uuid.UUID
+	Name        string
+	Description string
+	CreatedAt   time.Time
 }
 
 type PeerInfo struct {
@@ -21,7 +22,7 @@ type PeerInfo struct {
 // сечас in-memory реализация, потоп sqlite
 type TrackerStore interface {
 	// манифесты
-	SaveManifest(id uuid.UUID, name string, data []byte) error
+	SaveManifest(id uuid.UUID, name, description string, data []byte) error
 
 	GetManifest(id uuid.UUID) ([]byte, error)
 

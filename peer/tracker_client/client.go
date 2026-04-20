@@ -6,15 +6,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
 )
 
 type ManifestMeta struct {
-	ID        uuid.UUID `json:"ID"`
-	Name      string    `json:"Name"`
-	CreatedAt time.Time `json:"CreatedAt"`
+	ID          uuid.UUID `json:"ID"`
+	Name        string    `json:"Name"`
+	Description string    `json:"Description"`
+	CreatedAt   time.Time `json:"CreatedAt"`
 }
 
 type PeerInfo struct {
@@ -37,9 +39,13 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
-func (c *Client) UploadManifest(id uuid.UUID, name string, data []byte) error {
-	url := fmt.Sprintf("%s/manifest?id=%s&name=%s", c.baseURL, id.String(), name)
-	resp, err := c.httpClient.Post(url, "application/octet-stream", bytes.NewReader(data))
+func (c *Client) UploadManifest(id uuid.UUID, name, description string, data []byte) error {
+	q := url.Values{}
+	q.Set("id", id.String())
+	q.Set("name", name)
+	q.Set("description", description)
+	u := c.baseURL + "/manifest?" + q.Encode()
+	resp, err := c.httpClient.Post(u, "application/octet-stream", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("Error in UploadManifest: %w", err)
 	}

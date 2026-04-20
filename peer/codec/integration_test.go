@@ -29,6 +29,7 @@ func TestIntegrationBuildManifestFromFile(t *testing.T) {
 		[][]byte{fileData},
 		nil,
 		filepath.Base(filePath),
+		"",
 		[]string{"http://localhost:8080"},
 		"integration test manifest",
 		peerID,

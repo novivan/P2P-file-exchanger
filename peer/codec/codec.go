@@ -34,6 +34,7 @@ type ManifestFile struct {
 	AnnounceList []string  // список URL трекеров
 	CreationDate time.Time // время создания манифеста
 	Comment      string    // произвольный комментарий
+	Description  string    // описание содержимого (для поиска наиболее подходящего варианта моделью)
 	CreatedBy    uuid.UUID // UUID пира, создавшего манифест
 }
 
@@ -102,6 +103,7 @@ func (c *Codec) BuildManifest(
 	files [][]byte,
 	filePaths [][]string,
 	name string,
+	description string,
 	trackers []string,
 	comment string,
 	createdBy uuid.UUID,
@@ -136,6 +138,7 @@ func (c *Codec) BuildManifest(
 		AnnounceList: trackers,
 		CreationDate: time.Now().UTC(),
 		Comment:      comment,
+		Description:  description,
 		CreatedBy:    createdBy,
 	}, nil
 }

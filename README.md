@@ -13,6 +13,26 @@
 go test ./... -v
 ```
 
+## Внимание: Для использование ии-функций на трекере нужно предварительно установаить модели:
+1) скачать ollama
+```
+brew install ollama
+```
+(ну или apt get)
+2) запускаем
+```
+ollama serve #на порту 11434
+```
+3) качаем на наш трекер модельки:
+```
+ollama pull bge-m3 #для сопоставления пользовательского ввода с описанием
+```
+это пока не реализовано:
+```
+ollama pull qwen2.5:1.5b
+```
+Псоле этого саму ollama можно остановить
+
 ## Локальная демонстрация (одна машина)
 
 ### 1. Запустить трекер
@@ -52,7 +72,9 @@ go build -o peerctl ./cmd/peerctl
 
 На первом пире начать раздачу файла:
 ```bash
-./peerctl -api http://127.0.0.1:9090 seed /path/to/file.bin
+./peerctl -api http://127.0.0.1:9090 seed \
+    --description "Короткая содержательная аннотация файла" \
+    /path/to/file.bin
 # вернётся JSON с manifest_id
 ```
 
@@ -78,7 +100,7 @@ go build -o peerctl ./cmd/peerctl
 | Метод | Путь | Описание |
 |---|---|---|
 | GET  | `/health`    | статус пира |
-| POST | `/seed`      | `{file_path, name?}` → добавить в раздачу |
+| POST | `/seed`      | `{file_path, description, name?}` → добавить в раздачу |
 | POST | `/download`  | `{manifest_id}` → скачать |
 | GET  | `/torrents`  | свои торренты |
 | GET  | `/manifests` | список манифестов на трекере |

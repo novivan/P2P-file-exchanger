@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -24,11 +25,11 @@ Usage:
   peerctl [-api URL] <command> [args]
 
 Commands:
-  seed <file_path> [name]   попросить пира раздавать файл
-  download <manifest_id>    попросить пира скачать манифест
-  list                      торренты этого пира
-  manifests                 список манифестов на трекере
-  health                    статус пира
+  seed --description "TEXT" <file_path> [name]	попросить пира раздавать файл
+  download <manifest_id>                       	попросить пира скачать манифест
+  list                                         	торренты этого пира
+  manifests                                    	список манифестов на трекере
+  health                                       	статус пира
 
 Env:
   PEER_API                  базовый URL API пира (default %s)
@@ -67,16 +68,38 @@ Env:
 }
 
 func cmdSeed(api string, args []string) {
-	if len(args) < 1 {
-		fatal("seed: usage: peerctl seed <file_path> [name]")
+	fs := flag.NewFlagSet("seed", flag.ExitOnError)
+	description := fs.String("description", "", "описание файла (обязательно, будет использоваться для семантического поиска)")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, `seed: usage: peerctl seed --description "TEXT" <file_path> [name]
+
+Flags:
+  --description "TEXT"   описание файла (обязательно)
+`)
 	}
-	absPath, err := filepath.Abs(args[0])
+	if err := fs.Parse(args); err != nil {
+		fatal("seed: parse flags: %v", err)
+	}
+	rest := fs.Args()
+	if len(rest) < 1 {
+		fs.Usage()
+		os.Exit(2)
+	}
+	desc := strings.TrimSpace(*description)
+	if desc == "" {
+		fatal("seed: --description обязателен и не может быть пустым")
+	}
+
+	absPath, err := filepath.Abs(rest[0])
 	if err != nil {
 		fatal("seed: abs path: %v", err)
 	}
-	body := map[string]string{"file_path": absPath}
-	if len(args) >= 2 {
-		body["name"] = args[1]
+	body := map[string]string{
+		"file_path":   absPath,
+		"description": desc,
+	}
+	if len(rest) >= 2 {
+		body["name"] = rest[1]
 	}
 
 	var resp map[string]any
@@ -124,9 +147,15 @@ func cmdManifests(api string) {
 		fmt.Println("(трекер пуст)")
 		return
 	}
-	fmt.Printf("%-38s  %-24s  %s\n", "ID", "CREATED_AT", "NAME")
-	for _, m := range resp {
-		fmt.Printf("%-38v  %-24v  %v\n", m["ID"], m["CreatedAt"], m["Name"])
+	for i, m := range resp {
+		if i > 0 {
+			fmt.Println()
+			fmt.Println()
+		}
+		fmt.Printf("ID:          %v\n", m["ID"])
+		fmt.Printf("\tNAME:        %v\n", m["Name"])
+		fmt.Printf("\tCREATED_AT:  %v\n", m["CreatedAt"])
+		fmt.Printf("\tDESCRIPTION: %v\n", m["Description"])
 	}
 }
 

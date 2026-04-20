@@ -26,9 +26,14 @@ func (srv *Server) hello(c *gin.Context) {
 func (srv *Server) uploadManifest(c *gin.Context) {
 	idStr := c.Query("id")
 	name := c.Query("name")
+	description := c.Query("description")
 
 	if idStr == "" || name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id and name query params are required"})
+		return
+	}
+	if description == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "description query param is required"})
 		return
 	}
 
@@ -44,7 +49,7 @@ func (srv *Server) uploadManifest(c *gin.Context) {
 		return
 	}
 
-	if err := srv.store.SaveManifest(id, name, data); err != nil {
+	if err := srv.store.SaveManifest(id, name, description, data); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

@@ -218,6 +218,7 @@ func TestBuildManifestSingleFile(t *testing.T) {
 		[][]byte{data},
 		nil,
 		"test.txt",
+		"",
 		[]string{"http://tracker:8080"},
 		"test comment",
 		peerID,
@@ -275,6 +276,7 @@ func TestBuildManifestMultipleFiles(t *testing.T) {
 		[][]byte{file1, file2},
 		paths,
 		"mydir",
+		"",
 		[]string{"http://tracker:8080"},
 		"",
 		peerID,
@@ -306,7 +308,7 @@ func TestBuildManifestPiecesMatchEncode(t *testing.T) {
 	manifestID := uuid.New()
 	peerID := uuid.New()
 
-	m, err := c.BuildManifest(manifestID, [][]byte{data}, nil, "big.bin", nil, "", peerID)
+	m, err := c.BuildManifest(manifestID, [][]byte{data}, nil, "big.bin", "", nil, "", peerID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -335,11 +337,13 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 	manifestID := uuid.New()
 	peerID := uuid.New()
 
+	description := "Тестовое описание для проверки сериализации"
 	original, err := c.BuildManifest(
 		manifestID,
 		[][]byte{data},
 		nil,
 		"roundtrip.txt",
+		description,
 		[]string{"http://tracker1:8080", "http://tracker2:9090"},
 		"some comment",
 		peerID,
@@ -371,6 +375,13 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 	if decoded.Comment != original.Comment {
 		t.Errorf("Comment: got %q, want %q", decoded.Comment, original.Comment)
 	}
+	if original.Description != description {
+		t.Errorf("Building manifest Error! Description: got %q, want %q", decoded.Description, description)
+	}
+	if decoded.Description != original.Description {
+		t.Errorf("Encoding/decoding error! Description: got %q, want %q", decoded.Description, original.Description)
+	}
+
 	if decoded.ID != original.ID {
 		t.Errorf("ID: got %v, want %v", decoded.ID, original.ID)
 	}
@@ -410,6 +421,7 @@ func TestMarshalUnmarshalMultipleFiles(t *testing.T) {
 		[][]byte{file1, file2},
 		[][]string{{"a", "file1.txt"}, {"a", "file2.txt"}},
 		"mydir",
+		"",
 		[]string{"http://tracker:8080"},
 		"",
 		peerID,
@@ -535,7 +547,7 @@ func TestDecodeRoundtrip(t *testing.T) {
 	files := [][]byte{fileA, fileB}
 
 	manifest, err := c.BuildManifest(
-		uuid.New(), files, nil, "test", nil, "", uuid.New(),
+		uuid.New(), files, nil, "test", "", nil, "", uuid.New(),
 	)
 	if err != nil {
 		t.Fatalf("BuildManifest: %v", err)

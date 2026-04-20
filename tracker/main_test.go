@@ -46,7 +46,7 @@ func TestUploadManifest(t *testing.T) {
 	body := []byte("bencode manifest bytes")
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/manifest?id="+id.String()+"&name=test.manifest", bytes.NewReader(body))
+	req, _ := http.NewRequest("POST", "/manifest?id="+id.String()+"&name=test.manifest&description=some+manifest+description", bytes.NewReader(body))
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -58,24 +58,31 @@ func TestUploadManifestMissingParams(t *testing.T) {
 	r := setupRouter(store.NewInMemoryStore())
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/manifest?name=test", bytes.NewReader([]byte("data")))
+	req, _ := http.NewRequest("POST", "/manifest?name=test&description=d", bytes.NewReader([]byte("data")))
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for missing id, got %d", w.Code)
 	}
 
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/manifest?id="+uuid.New().String(), bytes.NewReader([]byte("data")))
+	req, _ = http.NewRequest("POST", "/manifest?id="+uuid.New().String()+"&description=d", bytes.NewReader([]byte("data")))
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for missing name, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("POST", "/manifest?id="+uuid.New().String()+"&name=test", bytes.NewReader([]byte("data")))
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing description, got %d", w.Code)
 	}
 }
 
 func TestUploadManifestInvalidID(t *testing.T) {
 	r := setupRouter(store.NewInMemoryStore())
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/manifest?id=not-a-uuid&name=test", bytes.NewReader([]byte("data")))
+	req, _ := http.NewRequest("POST", "/manifest?id=not-a-uuid&name=test&description=d", bytes.NewReader([]byte("data")))
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
@@ -88,7 +95,7 @@ func TestGetManifest(t *testing.T) {
 
 	id := uuid.New()
 	data := []byte("manifest content")
-	s.SaveManifest(id, "test", data)
+	s.SaveManifest(id, "test", "desc", data)
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/manifest/"+id.String(), nil)
@@ -126,8 +133,8 @@ func TestListManifests(t *testing.T) {
 	s := store.NewInMemoryStore()
 	r := setupRouter(s)
 
-	s.SaveManifest(uuid.New(), "first", []byte("a"))
-	s.SaveManifest(uuid.New(), "second", []byte("b"))
+	s.SaveManifest(uuid.New(), "first", "desc1", []byte("a"))
+	s.SaveManifest(uuid.New(), "second", "desc2", []byte("b"))
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/manifests", nil)
@@ -185,7 +192,7 @@ func TestAnnounce(t *testing.T) {
 
 	manifestID := uuid.New()
 	peerID := uuid.New()
-	s.SaveManifest(manifestID, "m", []byte("data"))
+	s.SaveManifest(manifestID, "m", "desc", []byte("data"))
 	s.RegisterPeer(peerID, "127.0.0.1:9000")
 
 	body, _ := json.Marshal(map[string]string{
@@ -231,7 +238,7 @@ func TestGetSeeders(t *testing.T) {
 
 	manifestID := uuid.New()
 	peerID := uuid.New()
-	s.SaveManifest(manifestID, "m", []byte("data"))
+	s.SaveManifest(manifestID, "m", "desc", []byte("data"))
 	s.RegisterPeer(peerID, "127.0.0.1:9000")
 	s.AnnounceSeeder(manifestID, peerID)
 

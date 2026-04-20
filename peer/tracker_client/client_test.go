@@ -41,7 +41,7 @@ func TestUploadManifest_Success(t *testing.T) {
 
 	client := NewClient(srv.URL)
 	id := uuid.New()
-	err := client.UploadManifest(id, "test.manifest", []byte("bencode data"))
+	err := client.UploadManifest(id, "test.manifest", "test description", []byte("bencode data"))
 	if err != nil {
 		t.Fatalf("UploadManifest returned unexpected error: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestUploadManifest_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	err := client.UploadManifest(uuid.New(), "test", []byte("data"))
+	err := client.UploadManifest(uuid.New(), "test", "desc", []byte("data"))
 	if err == nil {
 		t.Fatal("expected error for non-201 response, got nil")
 	}
@@ -66,17 +66,22 @@ func TestUploadManifest_ServerError(t *testing.T) {
 func TestUploadManifest_SendsCorrectQueryParams(t *testing.T) {
 	id := uuid.New()
 	wantName := "my-manifest"
+	wantDescription := "Описание со спец-символами ? & = и пробелами"
 	wantData := []byte("hello bencode")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/manifest", func(w http.ResponseWriter, r *http.Request) {
 		gotID := r.URL.Query().Get("id")
 		gotName := r.URL.Query().Get("name")
+		gotDescription := r.URL.Query().Get("description")
 		if gotID != id.String() {
 			t.Errorf("id mismatch: got %q, want %q", gotID, id.String())
 		}
 		if gotName != wantName {
 			t.Errorf("name mismatch: got %q, want %q", gotName, wantName)
+		}
+		if gotDescription != wantDescription {
+			t.Errorf("description mismatch: got %q, want %q", gotDescription, wantDescription)
 		}
 		body, _ := io.ReadAll(r.Body)
 		if string(body) != string(wantData) {
@@ -89,7 +94,7 @@ func TestUploadManifest_SendsCorrectQueryParams(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	if err := client.UploadManifest(id, wantName, wantData); err != nil {
+	if err := client.UploadManifest(id, wantName, wantDescription, wantData); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

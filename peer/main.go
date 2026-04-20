@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -94,7 +96,7 @@ func (ps *PeerServer) Close() error {
 	return ps.seeder.Close()
 }
 
-func (ps *PeerServer) AddSeed(filePath, name string) (*TorrentInfo, error) {
+func (ps *PeerServer) AddSeed(filePath, name, description string) (*TorrentInfo, error) {
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("AddSeed: abs %q: %w", filePath, err)
@@ -117,6 +119,7 @@ func (ps *PeerServer) AddSeed(filePath, name string) (*TorrentInfo, error) {
 		[][]byte{data},
 		nil,
 		name,
+		description,
 		[]string{ps.trackerURL},
 		"",
 		ps.peerID,
@@ -130,7 +133,7 @@ func (ps *PeerServer) AddSeed(filePath, name string) (*TorrentInfo, error) {
 		return nil, fmt.Errorf("AddSeed: marshal manifest: %w", err)
 	}
 
-	if err := ps.tracker.UploadManifest(manifestID, name, raw); err != nil {
+	if err := ps.tracker.UploadManifest(manifestID, name, manifest.Description, raw); err != nil {
 		return nil, fmt.Errorf("AddSeed: upload manifest: %w", err)
 	}
 
@@ -294,16 +297,41 @@ func (ps *PeerServer) handleHealth(c *gin.Context) {
 	})
 }
 
+const (
+	descriptionMinLen = 30
+	descriptionMaxLen = 8000
+)
+
+func validateDescription(description string) error {
+	trimmed := strings.TrimSpace(description)
+	if trimmed == "" {
+		return fmt.Errorf("description is required")
+	}
+	runeCount := utf8.RuneCountInString(trimmed)
+	if runeCount < descriptionMinLen {
+		return fmt.Errorf("description is too short: %d characters, minimum is %d", runeCount, descriptionMinLen)
+	}
+	if runeCount > descriptionMaxLen {
+		return fmt.Errorf("description is too long: %d characters, maximum is %d", runeCount, descriptionMaxLen)
+	}
+	return nil
+}
+
 func (ps *PeerServer) handleSeed(c *gin.Context) {
 	var body struct {
-		FilePath string `json:"file_path" binding:"required"`
-		Name     string `json:"name"`
+		FilePath    string `json:"file_path" binding:"required"`
+		Name        string `json:"name"`
+		Description string `json:"description" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	info, err := ps.AddSeed(body.FilePath, body.Name)
+	if err := validateDescription(body.Description); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	info, err := ps.AddSeed(body.FilePath, body.Name, strings.TrimSpace(body.Description))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

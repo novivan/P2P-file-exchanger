@@ -12,12 +12,23 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"peer/config"
+	"peer/netutil"
 )
 
 const defaultAPI = "http://127.0.0.1:9090"
 
 func main() {
-	apiFlag := flag.String("api", envOr("PEER_API", defaultAPI), "peer HTTP API base URL (or $PEER_API)")
+	cfg, err := config.Load("config.yaml")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to load config: %v\n", err)
+	}
+
+	localIP := netutil.MustGetLocalIP()
+	defaultAPIWithIP := fmt.Sprintf("http://%s:%d", localIP, cfg.Server.APIPort)
+
+	apiFlag := flag.String("api", envOr("PEER_API", defaultAPIWithIP), "peer HTTP API base URL (or $PEER_API)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `peerctl — CLI для сервиса-пира (через его HTTP API)
 

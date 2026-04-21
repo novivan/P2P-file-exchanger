@@ -1,0 +1,3 @@
+embedder:
+  ollama_url: "http://localhost:11434"
+  model: "bge-m3"

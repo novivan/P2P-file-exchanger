@@ -5,11 +5,11 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"tracker/config"
 	"tracker/embedder"
 	"tracker/store"
 )
@@ -195,12 +195,17 @@ func (srv *Server) search(c *gin.Context) {
 func main() {
 	fmt.Println("Starting tracker...")
 
+	cfg, err := config.Load("config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
 	s := store.NewInMemoryStore()
 
 	var e embedder.Embedder
-	if ollamaURL := os.Getenv("OLLAMA_URL"); ollamaURL != "" {
-		e = embedder.NewOllamaEmbedder(ollamaURL, "bge-m3")
-		log.Printf("Using Ollama embedder at %s", ollamaURL)
+	if cfg.Embedder.OllamaURL != "" {
+		e = embedder.NewOllamaEmbedder(cfg.Embedder.OllamaURL, cfg.Embedder.Model)
+		log.Printf("Using Ollama embedder at %s", cfg.Embedder.OllamaURL)
 	} else {
 		e = &embedder.NoopEmbedder{}
 		log.Println("Using NoopEmbedder (search will return random results)")

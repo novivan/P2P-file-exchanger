@@ -13,10 +13,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/adrg/xdg"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"peer/codec"
+	"peer/config"
+	"peer/netutil"
 	"peer/p2p"
 	"peer/tracker_client"
 )
@@ -397,18 +400,21 @@ func envOr(key, def string) string {
 }
 
 func main() {
-	trackerURL := envOr("TRACKER_URL", "http://localhost:8080")
-	p2pListen := envOr("P2P_ADDR", "127.0.0.1:0")
-	p2pExternal := os.Getenv("P2P_EXTERNAL_ADDR")
-	downloadDir := envOr("DOWNLOAD_DIR", "./downloads")
-	apiAddr := envOr("API_ADDR", "127.0.0.1:9090")
-
-	if p2pExternal == "" {
-		host, port, err := net.SplitHostPort(p2pListen)
-		if err == nil && (host == "0.0.0.0" || host == "") {
-			p2pExternal = net.JoinHostPort("127.0.0.1", port)
-		}
+	// Load config
+	cfg, err := config.Load("config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
 	}
+
+	trackerURL := cfg.Tracker.URL
+
+	downloadDir := xdg.UserDirs.Download
+
+	localIP := netutil.MustGetLocalIP()
+
+	p2pListen := net.JoinHostPort(localIP, fmt.Sprintf("%d", cfg.Server.P2PPort))
+	p2pExternal := p2pListen
+	apiAddr := net.JoinHostPort(localIP, fmt.Sprintf("%d", cfg.Server.APIPort))
 
 	ps, err := NewPeerServer(trackerURL, p2pListen, p2pExternal, downloadDir)
 	if err != nil {
@@ -416,8 +422,8 @@ func main() {
 	}
 	defer ps.Close()
 
-	log.Printf("peer started: id=%s p2p=%s api=%s tracker=%s downloads=%s",
-		ps.peerID, ps.p2pAddr, apiAddr, trackerURL, downloadDir)
+	log.Printf("peer started: id=%s p2p=%s (external=%s) api=%s tracker=%s downloads=%s",
+		ps.peerID, ps.p2pAddr, p2pExternal, apiAddr, trackerURL, downloadDir)
 
 	router := gin.Default()
 	router.GET("/health", ps.handleHealth)

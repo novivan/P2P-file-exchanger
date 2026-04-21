@@ -3,20 +3,24 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"tracker/embedder"
 	"tracker/store"
 )
 
 type Server struct {
-	store store.TrackerStore
+	store    store.TrackerStore
+	embedder embedder.Embedder
 }
 
-func NewServer(s store.TrackerStore) *Server {
-	return &Server{store: s}
+func NewServer(s store.TrackerStore, e embedder.Embedder) *Server {
+	return &Server{store: s, embedder: e}
 }
 
 func (srv *Server) hello(c *gin.Context) {
@@ -49,7 +53,13 @@ func (srv *Server) uploadManifest(c *gin.Context) {
 		return
 	}
 
-	if err := srv.store.SaveManifest(id, name, description, data); err != nil {
+	embedding, err := srv.embedder.Embed(c.Request.Context(), description)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to embed description: %v", err)})
+		return
+	}
+
+	if err := srv.store.SaveManifest(id, name, description, embedding, data); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -153,11 +163,50 @@ func (srv *Server) getSeeders(c *gin.Context) {
 	c.JSON(http.StatusOK, peers)
 }
 
+func (srv *Server) search(c *gin.Context) {
+	var req struct {
+		Query string `json:"query" binding:"required"`
+		TopK  int    `json:"top_k"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.TopK <= 0 {
+		req.TopK = 3
+	}
+
+	queryEmbedding, err := srv.embedder.Embed(c.Request.Context(), req.Query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to embed query: %v", err)})
+		return
+	}
+
+	results, err := srv.store.SearchManifests(queryEmbedding, req.TopK)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
 func main() {
 	fmt.Println("Starting tracker...")
 
 	s := store.NewInMemoryStore()
-	srv := NewServer(s)
+
+	var e embedder.Embedder
+	if ollamaURL := os.Getenv("OLLAMA_URL"); ollamaURL != "" {
+		e = embedder.NewOllamaEmbedder(ollamaURL, "bge-m3")
+		log.Printf("Using Ollama embedder at %s", ollamaURL)
+	} else {
+		e = &embedder.NoopEmbedder{}
+		log.Println("Using NoopEmbedder (search will return random results)")
+	}
+
+	srv := NewServer(s, e)
 
 	router := gin.Default()
 
@@ -170,6 +219,7 @@ func main() {
 	router.POST("/peer", srv.registerPeer)
 	router.POST("/announce", srv.announce)
 	router.GET("/peers/:manifestID", srv.getSeeders)
+	router.POST("/search", srv.search)
 
 	router.Run(":8080")
 }

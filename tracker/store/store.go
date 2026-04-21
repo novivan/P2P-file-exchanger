@@ -11,6 +11,7 @@ type ManifestMeta struct {
 	Name        string
 	Description string
 	CreatedAt   time.Time
+	Embedding   []float32
 }
 
 type PeerInfo struct {
@@ -19,14 +20,23 @@ type PeerInfo struct {
 	LastSeen time.Time // время последнего запроса от пира
 }
 
+type SearchResult struct {
+	ID          uuid.UUID
+	Name        string
+	Description string
+	Score       float32
+}
+
 // сечас in-memory реализация, потоп sqlite
 type TrackerStore interface {
 	// манифесты
-	SaveManifest(id uuid.UUID, name, description string, data []byte) error
+	SaveManifest(id uuid.UUID, name, description string, embedding []float32, data []byte) error
 
 	GetManifest(id uuid.UUID) ([]byte, error)
 
 	ListManifests() ([]ManifestMeta, error)
+
+	SearchManifests(queryEmbedding []float32, topK int) ([]SearchResult, error)
 
 	// пиры
 	RegisterPeer(peerID uuid.UUID, address string) error

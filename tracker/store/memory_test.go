@@ -11,7 +11,7 @@ func TestSaveAndGetManifest(t *testing.T) {
 	id := uuid.New()
 	data := []byte("bencode manifest data")
 
-	if err := s.SaveManifest(id, "test.manifest", "desc", data); err != nil {
+	if err := s.SaveManifest(id, "test.manifest", "desc", nil, data); err != nil {
 		t.Fatalf("SaveManifest error: %v", err)
 	}
 
@@ -37,7 +37,7 @@ func TestSaveManifestIsolatesData(t *testing.T) {
 	id := uuid.New()
 	data := []byte("original")
 
-	s.SaveManifest(id, "f", "desc", data)
+	s.SaveManifest(id, "f", "desc", nil, data)
 
 	data[0] = 'X'
 
@@ -51,8 +51,8 @@ func TestListManifests(t *testing.T) {
 	s := NewInMemoryStore()
 
 	id1, id2 := uuid.New(), uuid.New()
-	s.SaveManifest(id1, "first", "desc1", []byte("a"))
-	s.SaveManifest(id2, "second", "desc2", []byte("b"))
+	s.SaveManifest(id1, "first", "desc1", nil, []byte("a"))
+	s.SaveManifest(id2, "second", "desc2", nil, []byte("b"))
 
 	list, err := s.ListManifests()
 	if err != nil {
@@ -120,7 +120,7 @@ func TestAnnounceAndGetSeeders(t *testing.T) {
 	manifestID := uuid.New()
 	peerID := uuid.New()
 
-	s.SaveManifest(manifestID, "m", "desc", []byte("data"))
+	s.SaveManifest(manifestID, "m", "desc", nil, []byte("data"))
 	s.RegisterPeer(peerID, "127.0.0.1:9000")
 
 	if err := s.AnnounceSeeder(manifestID, peerID); err != nil {
@@ -164,7 +164,7 @@ func TestAnnounceSeederManifestNotFound(t *testing.T) {
 func TestAnnounceSeederPeerNotFound(t *testing.T) {
 	s := NewInMemoryStore()
 	manifestID := uuid.New()
-	s.SaveManifest(manifestID, "m", "desc", []byte("data"))
+	s.SaveManifest(manifestID, "m", "desc", nil, []byte("data"))
 
 	err := s.AnnounceSeeder(manifestID, uuid.New())
 	if err == nil {
@@ -175,7 +175,7 @@ func TestAnnounceSeederPeerNotFound(t *testing.T) {
 func TestMultipleSeedersForManifest(t *testing.T) {
 	s := NewInMemoryStore()
 	manifestID := uuid.New()
-	s.SaveManifest(manifestID, "m", "desc", []byte("data"))
+	s.SaveManifest(manifestID, "m", "desc", nil, []byte("data"))
 
 	peer1, peer2 := uuid.New(), uuid.New()
 	s.RegisterPeer(peer1, "127.0.0.1:9001")
@@ -195,7 +195,7 @@ func TestAnnounceSeederIdempotent(t *testing.T) {
 	manifestID := uuid.New()
 	peerID := uuid.New()
 
-	s.SaveManifest(manifestID, "m", "desc", []byte("data"))
+	s.SaveManifest(manifestID, "m", "desc", nil, []byte("data"))
 	s.RegisterPeer(peerID, "127.0.0.1:9000")
 
 	s.AnnounceSeeder(manifestID, peerID)

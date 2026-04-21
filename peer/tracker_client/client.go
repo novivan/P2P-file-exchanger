@@ -25,6 +25,22 @@ type PeerInfo struct {
 	LastSeen time.Time `json:"LastSeen"`
 }
 
+type SearchResult struct {
+	ID          uuid.UUID `json:"ID"`
+	Name        string    `json:"Name"`
+	Description string    `json:"Description"`
+	Score       float32   `json:"Score"`
+}
+
+type SearchRequest struct {
+	Query string `json:"query"`
+	TopK  int    `json:"top_k"`
+}
+
+type SearchResponse struct {
+	Results []SearchResult `json:"results"`
+}
+
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
@@ -156,4 +172,31 @@ func (c *Client) GetSeeders(manifestID uuid.UUID) ([]PeerInfo, error) {
 		return nil, fmt.Errorf("GetSeeders: decode: %w", err)
 	}
 	return peers, nil
+}
+
+func (c *Client) Search(query string, topK int) ([]SearchResult, error) {
+	req := SearchRequest{Query: query, TopK: topK}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("Search: marshal: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/search", c.baseURL)
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("Search: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Search: tracker returned %d: %s", resp.StatusCode, b)
+	}
+
+	var result SearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("Search response -  decode: %w", err)
+	}
+
+	return result.Results, nil
 }

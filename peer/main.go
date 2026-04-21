@@ -373,6 +373,22 @@ func (ps *PeerServer) handleListRemote(c *gin.Context) {
 	c.JSON(http.StatusOK, metas)
 }
 
+func (ps *PeerServer) handleSearch(c *gin.Context) {
+	var req tracker_client.SearchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	results, err := ps.tracker.Search(req.Query, req.TopK)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -409,6 +425,7 @@ func main() {
 	router.POST("/download", ps.handleDownload)
 	router.GET("/torrents", ps.handleList)
 	router.GET("/manifests", ps.handleListRemote)
+	router.POST("/search", ps.handleSearch)
 
 	if err := router.Run(apiAddr); err != nil {
 		log.Fatalf("peer api: %v", err)

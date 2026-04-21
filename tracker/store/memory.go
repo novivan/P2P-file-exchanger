@@ -2,6 +2,8 @@ package store
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -29,12 +31,18 @@ func NewInMemoryStore() *InMemoryStore {
 	}
 }
 
-func (s *InMemoryStore) SaveManifest(id uuid.UUID, name, description string, data []byte) error {
+func (s *InMemoryStore) SaveManifest(id uuid.UUID, name, description string, embedding []float32, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	stored := make([]byte, len(data))
 	copy(stored, data)
+
+	var storedEmbedding []float32
+	if embedding != nil {
+		storedEmbedding = make([]float32, len(embedding))
+		copy(storedEmbedding, embedding)
+	}
 
 	s.manifests[id] = stored
 	s.manifestMeta[id] = ManifestMeta{
@@ -42,6 +50,7 @@ func (s *InMemoryStore) SaveManifest(id uuid.UUID, name, description string, dat
 		Name:        name,
 		Description: description,
 		CreatedAt:   time.Now().UTC(),
+		Embedding:   storedEmbedding,
 	}
 	return nil
 }
@@ -68,6 +77,48 @@ func (s *InMemoryStore) ListManifests() ([]ManifestMeta, error) {
 		result = append(result, meta)
 	}
 	return result, nil
+}
+
+func (s *InMemoryStore) SearchManifests(queryEmbedding []float32, topK int) ([]SearchResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var results []SearchResult
+	for id, meta := range s.manifestMeta {
+		if meta.Embedding == nil {
+			continue
+		}
+		score := cosineSimilarity(queryEmbedding, meta.Embedding)
+		results = append(results, SearchResult{
+			ID:          id,
+			Name:        meta.Name,
+			Description: meta.Description,
+			Score:       score,
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
+	if len(results) > topK {
+		results = results[:topK]
+	}
+
+	return results, nil
+}
+
+func cosineSimilarity(a, b []float32) float32 {
+	var dot, normA, normB float32
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
 }
 
 func (s *InMemoryStore) RegisterPeer(peerID uuid.UUID, address string) error {

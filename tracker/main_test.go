@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"tracker/embedder"
 	"tracker/store"
 )
 
@@ -18,7 +19,7 @@ func init() {
 }
 
 func setupRouter(s store.TrackerStore) *gin.Engine {
-	srv := NewServer(s)
+	srv := NewServer(s, &embedder.NoopEmbedder{})
 	r := gin.New()
 	r.GET("/hello", srv.hello)
 	r.POST("/manifest", srv.uploadManifest)
@@ -27,6 +28,7 @@ func setupRouter(s store.TrackerStore) *gin.Engine {
 	r.POST("/peer", srv.registerPeer)
 	r.POST("/announce", srv.announce)
 	r.GET("/peers/:manifestID", srv.getSeeders)
+	r.POST("/search", srv.search)
 	return r
 }
 
@@ -95,7 +97,7 @@ func TestGetManifest(t *testing.T) {
 
 	id := uuid.New()
 	data := []byte("manifest content")
-	s.SaveManifest(id, "test", "desc", data)
+	s.SaveManifest(id, "test", "desc", nil, data)
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/manifest/"+id.String(), nil)
@@ -133,8 +135,8 @@ func TestListManifests(t *testing.T) {
 	s := store.NewInMemoryStore()
 	r := setupRouter(s)
 
-	s.SaveManifest(uuid.New(), "first", "desc1", []byte("a"))
-	s.SaveManifest(uuid.New(), "second", "desc2", []byte("b"))
+	s.SaveManifest(uuid.New(), "first", "desc1", nil, []byte("a"))
+	s.SaveManifest(uuid.New(), "second", "desc2", nil, []byte("b"))
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/manifests", nil)
@@ -192,7 +194,7 @@ func TestAnnounce(t *testing.T) {
 
 	manifestID := uuid.New()
 	peerID := uuid.New()
-	s.SaveManifest(manifestID, "m", "desc", []byte("data"))
+	s.SaveManifest(manifestID, "m", "desc", nil, []byte("data"))
 	s.RegisterPeer(peerID, "127.0.0.1:9000")
 
 	body, _ := json.Marshal(map[string]string{
@@ -238,7 +240,7 @@ func TestGetSeeders(t *testing.T) {
 
 	manifestID := uuid.New()
 	peerID := uuid.New()
-	s.SaveManifest(manifestID, "m", "desc", []byte("data"))
+	s.SaveManifest(manifestID, "m", "desc", nil, []byte("data"))
 	s.RegisterPeer(peerID, "127.0.0.1:9000")
 	s.AnnounceSeeder(manifestID, peerID)
 

@@ -29,6 +29,7 @@ Commands:
   download <manifest_id>                       	попросить пира скачать манифест
   list                                         	торренты этого пира
   manifests                                    	список манифестов на трекере
+  search "users_query"                          поиск манифестов по описанию (топ-3)
   health                                       	статус пира
 
 Env:
@@ -58,6 +59,8 @@ Env:
 		cmdList(api)
 	case "manifests":
 		cmdManifests(api)
+	case "search":
+		cmdSearch(api, rest)
 	case "health":
 		cmdHealth(api)
 	default:
@@ -156,6 +159,43 @@ func cmdManifests(api string) {
 		fmt.Printf("\tNAME:        %v\n", m["Name"])
 		fmt.Printf("\tCREATED_AT:  %v\n", m["CreatedAt"])
 		fmt.Printf("\tDESCRIPTION: %v\n", m["Description"])
+	}
+}
+
+func cmdSearch(api string, args []string) {
+	if len(args) < 1 {
+		fatal("search: usage: peerctl search <query>")
+	}
+	query := strings.Join(args, " ")
+
+	body := map[string]any{
+		"query": query,
+		"top_k": 3,
+	}
+
+	var resp struct {
+		Results []struct {
+			ID          string  `json:"ID"`
+			Name        string  `json:"Name"`
+			Description string  `json:"Description"`
+			Score       float32 `json:"Score"`
+		} `json:"results"`
+	}
+	if err := postJSON(api+"/search", body, &resp); err != nil {
+		fatal("search: %v", err)
+	}
+
+	if len(resp.Results) == 0 {
+		fmt.Println("(ничего не найдено)")
+		return
+	}
+
+	fmt.Printf("%-38s  %-30s  %s\n", "ID", "NAME", "SCORE")
+	for _, r := range resp.Results {
+		fmt.Printf("\t%-38v  %-30v  %.4f\n", r.ID, r.Name, r.Score)
+		if r.Description != "" {
+			fmt.Printf("\n\t Describtion: %s\n", r.Description)
+		}
 	}
 }
 

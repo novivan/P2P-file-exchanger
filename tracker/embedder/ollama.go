@@ -5,38 +5,41 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"sync"
+	"time"
 )
 
 type OllamaEmbedder struct {
 	baseURL string
 	model   string
 	client  *http.Client
+	mu      sync.Mutex
 	dim     int
 }
 
 type OllamaEmbedRequest struct {
 	Model string `json:"model"`
-	Text  string `json:"text"`
+	Input string `json:"input"`
 }
 
 type OllamaEmbedResponse struct {
-	Embedding []float32 `json:"embedding"`
+	Embeddings [][]float32 `json:"embeddings"`
 }
 
 func NewOllamaEmbedder(baseURL, model string) *OllamaEmbedder {
 	return &OllamaEmbedder{
 		baseURL: baseURL,
 		model:   model,
-		client:  &http.Client{},
-		dim:     0,
+		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
 func (o *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	reqBody := OllamaEmbedRequest{
 		Model: o.model,
-		Text:  text,
+		Input: text,
 	}
 
 	data, err := json.Marshal(reqBody)
@@ -57,7 +60,8 @@ func (o *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result OllamaEmbedResponse
@@ -65,13 +69,23 @@ func (o *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	if o.dim == 0 && len(result.Embedding) > 0 {
-		o.dim = len(result.Embedding)
+	if len(result.Embeddings) == 0 || len(result.Embeddings[0]) == 0 {
+		return nil, fmt.Errorf("ollama returned empty embeddings (check model (\"%q\") and input)", o.model)
 	}
 
-	return result.Embedding, nil
+	embedding := result.Embeddings[0]
+
+	if o.dim == 0 {
+		o.mu.Lock()
+		o.dim = len(embedding)
+		o.mu.Unlock()
+	}
+
+	return embedding, nil
 }
 
 func (o *OllamaEmbedder) Len() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	return o.dim
 }

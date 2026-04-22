@@ -109,11 +109,22 @@ func (s *InMemoryStore) SearchManifests(queryEmbedding []float32, topK int) ([]S
 }
 
 func cosineSimilarity(a, b []float32) float32 {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
 	var dot, normA, normB float32
-	for i := range a {
-		dot += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
+	for i := 0; i < n; i++ {
+		var ai, bi float32
+		if i < len(a) {
+			ai = a[i]
+		}
+		if i < len(b) {
+			bi = b[i]
+		}
+		dot += ai * bi
+		normA += ai * ai
+		normB += bi * bi
 	}
 	if normA == 0 || normB == 0 {
 		return 0

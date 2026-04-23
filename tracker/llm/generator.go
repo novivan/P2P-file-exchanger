@@ -24,7 +24,7 @@ func NewOllamaGenerator(baseURL, model string) *OllamaGenerator {
 	return &OllamaGenerator{
 		baseURL: baseURL,
 		model:   model,
-		client:  &http.Client{Timeout: 60 * time.Second},
+		client:  &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 

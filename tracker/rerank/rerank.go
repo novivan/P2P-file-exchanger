@@ -13,9 +13,30 @@ import (
 	"tracker/store"
 )
 
-const systemPrompt = `Ты помощник в системе поиска файлов. Оцени релевантность каждого кандидата запросу пользователя.
-Верни строго JSON-массив вида [{"id":"<uuid>","score":<число от 0 до 10>}]. Без пояснений, без текста вне JSON.
-Шкала: 0 — совсем не релевантно, 10 — идеально подходит. Учитывай смысл названия и описания файла.`
+const systemPrompt = `You are a relevance ranker for a P2P file search system.
+
+TASK: For EACH candidate file below, output an integer score from 0 to 10 reflecting how well its name and description match the user's query.
+
+SCORING RUBRIC:
+- 0-2: completely unrelated to the query
+- 3-4: tangentially related, shares only a topic keyword
+- 5-6: partially matches — covers some aspects of the query
+- 7-8: strongly matches — covers the main intent of the query
+- 9-10: perfect match — exactly what the user is looking for
+
+OUTPUT FORMAT (STRICT):
+You MUST return a JSON array with one object per candidate, in the SAME ORDER as given.
+Each object MUST have exactly two keys: "id" (string, the candidate's UUID) and "score" (integer 0..10).
+Return ONLY the JSON array. No prose, no explanation, no markdown code fences.
+Even if there is only one candidate, you MUST return an array with one element.
+
+EXAMPLE (for 2 candidates and query "рецепт борща"):
+[
+  {"id": "11111111-1111-1111-1111-111111111111", "score": 9},
+  {"id": "22222222-2222-2222-2222-222222222222", "score": 2}
+]
+
+Now read the user's query and candidates, then produce the JSON array.`
 
 type scoreItem struct {
 	ID    string  `json:"id"`
@@ -72,13 +93,12 @@ func ApplyHybridScore(results []store.SearchResult, alpha float32, finalN int) [
 
 func buildPrompt(query string, candidates []store.SearchResult) string {
 	var b strings.Builder
-	b.WriteString("Запрос пользователя: ")
-	b.WriteString(query)
-	b.WriteString("\n\nКандидаты:\n")
-	for _, c := range candidates {
-		fmt.Fprintf(&b, "\tid: %s\n\tname: %s\n\tdescription: %s\n\n", c.ID.String(), c.Name, c.Description)
+	fmt.Fprintf(&b, "User query: %s\n\n", query)
+	fmt.Fprintf(&b, "Candidates (%d total):\n\n", len(candidates))
+	for i, c := range candidates {
+		fmt.Fprintf(&b, "#%d\n  id: %s\n  name: %s\n  description: %s\n\n", i+1, c.ID.String(), c.Name, c.Description)
 	}
-	b.WriteString("\nВерни JSON-массив оценок в формате [{\"id\":\"<uuid>\",\"score\":<0..10>}] для всех указанных id.")
+	fmt.Fprintf(&b, "Return a JSON array with EXACTLY %d objects (one per candidate, same order), each of shape {\"id\":\"<uuid>\",\"score\":<integer 0..10>}. No prose, no markdown.", len(candidates))
 	return b.String()
 }
 

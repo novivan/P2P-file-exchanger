@@ -21,10 +21,13 @@ type PeerInfo struct {
 }
 
 type SearchResult struct {
-	ID          uuid.UUID
-	Name        string
-	Description string
-	Score       float32
+	ID          uuid.UUID `json:"ID"`
+	Name        string    `json:"Name"`
+	Description string    `json:"Description"`
+	Score       float32   `json:"Score"`
+	CosineScore float32   `json:"CosineScore"`
+	LLMScore    float32   `json:"LLMScore"`
+	Explanation string    `json:"Explanation"`
 }
 
 // сечас in-memory реализация, потоп sqlite

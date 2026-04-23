@@ -30,6 +30,9 @@ type SearchResult struct {
 	Name        string    `json:"Name"`
 	Description string    `json:"Description"`
 	Score       float32   `json:"Score"`
+	CosineScore float32   `json:"CosineScore"`
+	LLMScore    float32   `json:"LLMScore"`
+	Explanation string    `json:"Explanation"`
 }
 
 type SearchRequest struct {

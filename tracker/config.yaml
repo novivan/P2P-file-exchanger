@@ -1,3 +1,15 @@
 embedder:
   ollama_url: "http://localhost:11434"
   model: "bge-m3"
+
+generator:
+  ollama_url: "http://localhost:11434"
+  model: "qwen2.5:3b"
+
+search:
+  candidate_k: 20
+  final_n: 5
+  rerank_enabled: true
+  rerank_alpha: 0.3
+  query_rewrite_enabled: true
+  explain_enabled: true

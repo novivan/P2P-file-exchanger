@@ -33,7 +33,7 @@ ollama pull bge-m3
 ```
 это пока не реализовано:
 ```
-ollama pull qwen2.5:1.5b
+ollama pull qwen2.5:3b 
 ```
 
 ## Локальная демонстрация (одна машина)

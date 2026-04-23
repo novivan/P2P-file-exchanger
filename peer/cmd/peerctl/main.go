@@ -190,6 +190,9 @@ func cmdSearch(api string, args []string) {
 			Name        string  `json:"Name"`
 			Description string  `json:"Description"`
 			Score       float32 `json:"Score"`
+			CosineScore float32 `json:"CosineScore"`
+			LLMScore    float32 `json:"LLMScore"`
+			Explanation string  `json:"Explanation"`
 		} `json:"results"`
 	}
 	if err := postJSON(api+"/search", body, &resp); err != nil {
@@ -201,12 +204,16 @@ func cmdSearch(api string, args []string) {
 		return
 	}
 
-	fmt.Printf("%-38s  %-30s  %s\n", "ID", "NAME", "SCORE")
+	fmt.Printf("%-38s  %-30s  %-8s  %-8s  %-8s\n", "ID", "NAME", "SCORE", "COSINE", "LLM")
 	for _, r := range resp.Results {
-		fmt.Printf("\t%-38v  %-30v  %.4f\n", r.ID, r.Name, r.Score)
+		fmt.Printf("\t%-38v  %-30v  %-8.4f  %-8.4f  %-8.2f\n", r.ID, r.Name, r.Score, r.CosineScore, r.LLMScore)
 		if r.Description != "" {
-			fmt.Printf("\n\t Describtion: %s\n", r.Description)
+			fmt.Printf(" \n\tDescription: %s\n", r.Description)
 		}
+		if r.Explanation != "" {
+			fmt.Printf("\n\tExplanation: %s\n", r.Explanation)
+		}
+		fmt.Println()
 	}
 }
 

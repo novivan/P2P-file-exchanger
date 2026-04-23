@@ -11,16 +11,20 @@ import (
 
 	"tracker/config"
 	"tracker/embedder"
+	"tracker/llm"
+	"tracker/rerank"
 	"tracker/store"
 )
 
 type Server struct {
-	store    store.TrackerStore
-	embedder embedder.Embedder
+	store     store.TrackerStore
+	embedder  embedder.Embedder
+	generator llm.Generator
+	searchCfg config.SearchConfig
 }
 
-func NewServer(s store.TrackerStore, e embedder.Embedder) *Server {
-	return &Server{store: s, embedder: e}
+func NewServer(s store.TrackerStore, e embedder.Embedder, g llm.Generator, searchCfg config.SearchConfig) *Server {
+	return &Server{store: s, embedder: e, generator: g, searchCfg: searchCfg}
 }
 
 func (srv *Server) hello(c *gin.Context) {
@@ -173,8 +177,12 @@ func (srv *Server) search(c *gin.Context) {
 		return
 	}
 
-	if req.TopK <= 0 {
-		req.TopK = 3
+	finalN := req.TopK
+	if finalN <= 0 {
+		finalN = srv.searchCfg.FinalN
+	}
+	if finalN <= 0 {
+		finalN = 3
 	}
 
 	queryEmbedding, err := srv.embedder.Embed(c.Request.Context(), req.Query)
@@ -183,10 +191,36 @@ func (srv *Server) search(c *gin.Context) {
 		return
 	}
 
-	results, err := srv.store.SearchManifests(queryEmbedding, req.TopK)
+	candidateK := srv.searchCfg.CandidateK
+	if candidateK <= 0 {
+		candidateK = finalN
+	}
+
+	candidates, err := srv.store.SearchManifests(queryEmbedding, candidateK)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	rerankApplied := false
+	if srv.searchCfg.RerankEnabled && srv.generator != nil && len(candidates) > 0 {
+		reranked, rerr := rerank.Rerank(c.Request.Context(), srv.generator, req.Query, candidates)
+		if rerr != nil {
+			log.Printf("search: rerank failed, falling back to cosine: %v", rerr)
+		} else {
+			candidates = reranked
+			rerankApplied = true
+		}
+	}
+
+	var results []store.SearchResult
+	if rerankApplied {
+		results = rerank.ApplyHybridScore(candidates, srv.searchCfg.RerankAlpha, finalN)
+	} else {
+		results = candidates
+		if len(results) > finalN {
+			results = results[:finalN]
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"results": results})
@@ -200,18 +234,33 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	log.Printf("Current config:")
+	log.Printf("\tembedder:  url=%s model=%s", cfg.Embedder.OllamaURL, cfg.Embedder.Model)
+	log.Printf("\tgenerator: url=%s model=%q", cfg.Generator.OllamaURL, cfg.Generator.Model)
+	log.Printf("\tsearch:    candidate_k=%d final_n=%d alpha=%.2f rerank=%v rewrite=%v explain=%v\n",
+		cfg.Search.CandidateK, cfg.Search.FinalN, cfg.Search.RerankAlpha,
+		cfg.Search.RerankEnabled, cfg.Search.QueryRewriteEnabled, cfg.Search.ExplainEnabled)
+
 	s := store.NewInMemoryStore()
 
 	var e embedder.Embedder
-	if cfg.Embedder.OllamaURL != "" {
+	if cfg.Embedder.OllamaURL != "" && cfg.Embedder.Model != "" {
 		e = embedder.NewOllamaEmbedder(cfg.Embedder.OllamaURL, cfg.Embedder.Model)
-		log.Printf("Using Ollama embedder at %s", cfg.Embedder.OllamaURL)
+		log.Printf("Using Ollama embedder at %s (model=%s)", cfg.Embedder.OllamaURL, cfg.Embedder.Model)
 	} else {
 		e = &embedder.NoopEmbedder{}
-		log.Println("Using NoopEmbedder (search will return random results)")
+		log.Println("Using EmptyEmbedder (search will not work)")
 	}
 
-	srv := NewServer(s, e)
+	var gen llm.Generator
+	if cfg.Generator.Model != "" && cfg.Generator.OllamaURL != "" {
+		gen = llm.NewOllamaGenerator(cfg.Generator.OllamaURL, cfg.Generator.Model)
+		log.Printf("Using Ollama generator at %s (model=%s)", cfg.Generator.OllamaURL, cfg.Generator.Model)
+	} else {
+		log.Println("Generator disabled (LLM features will be skipped)")
+	}
+
+	srv := NewServer(s, e, gen, cfg.Search)
 
 	router := gin.Default()
 

@@ -93,7 +93,8 @@ func (s *InMemoryStore) SearchManifests(queryEmbedding []float32, topK int) ([]S
 			ID:          id,
 			Name:        meta.Name,
 			Description: meta.Description,
-			Score:       score,
+			Score:       score, // Переопределяется потом, если вызывается llm'ка
+			CosineScore: score,
 		})
 	}
 
@@ -101,7 +102,7 @@ func (s *InMemoryStore) SearchManifests(queryEmbedding []float32, topK int) ([]S
 		return results[i].Score > results[j].Score
 	})
 
-	if len(results) > topK {
+	if topK > 0 && len(results) > topK {
 		results = results[:topK]
 	}
 

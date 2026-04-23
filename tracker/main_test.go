@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"tracker/config"
 	"tracker/embedder"
 	"tracker/store"
 )
@@ -19,7 +20,7 @@ func init() {
 }
 
 func setupRouter(s store.TrackerStore) *gin.Engine {
-	srv := NewServer(s, &embedder.NoopEmbedder{})
+	srv := NewServer(s, &embedder.NoopEmbedder{}, nil, config.SearchConfig{})
 	r := gin.New()
 	r.GET("/hello", srv.hello)
 	r.POST("/manifest", srv.uploadManifest)

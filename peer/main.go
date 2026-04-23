@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha1"
+	"embed"
 	"fmt"
 	"log"
 	"net"
@@ -23,6 +24,9 @@ import (
 	"peer/p2p"
 	"peer/tracker_client"
 )
+
+//go:embed ui/*
+var uiFS embed.FS
 
 type TorrentInfo struct {
 	ManifestID uuid.UUID `json:"manifest_id"`
@@ -432,6 +436,14 @@ func main() {
 	router.GET("/torrents", ps.handleList)
 	router.GET("/manifests", ps.handleListRemote)
 	router.POST("/search", ps.handleSearch)
+
+	indexHTML, err := uiFS.ReadFile("ui/index.html")
+	if err != nil {
+		log.Fatalf("peer ui: read index.html: %v", err)
+	}
+	router.GET("/", func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
+	})
 
 	if err := router.Run(apiAddr); err != nil {
 		log.Fatalf("peer api: %v", err)

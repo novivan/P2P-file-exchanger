@@ -11,6 +11,11 @@ type Config struct {
 	Embedder  EmbedderConfig  `yaml:"embedder"`
 	Generator GeneratorConfig `yaml:"generator"`
 	Search    SearchConfig    `yaml:"search"`
+	Store     StoreConfig     `yaml:"store"`
+}
+
+type StoreConfig struct {
+	Path string `yaml:"path"`
 }
 
 type EmbedderConfig struct {

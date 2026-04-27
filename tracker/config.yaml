@@ -13,3 +13,6 @@ search:
   rerank_alpha: 0.3
   query_rewrite_enabled: true
   explain_enabled: true
+
+store:
+  path: "tracker.db"

@@ -241,7 +241,19 @@ func main() {
 		cfg.Search.CandidateK, cfg.Search.FinalN, cfg.Search.RerankAlpha,
 		cfg.Search.RerankEnabled, cfg.Search.QueryRewriteEnabled, cfg.Search.ExplainEnabled)
 
-	s := store.NewInMemoryStore()
+	var s store.TrackerStore
+	if cfg.Store.Path != "" {
+		bs, err := store.NewBoltStore(cfg.Store.Path)
+		if err != nil {
+			log.Fatalf("Failed to open bolt store at %q: %v", cfg.Store.Path, err)
+		}
+		defer bs.Close()
+		s = bs
+		log.Printf("Using BoltStore at %s", cfg.Store.Path)
+	} else {
+		s = store.NewInMemoryStore()
+		log.Println("Using InMemoryStore (data will be lost on restart)")
+	}
 
 	var e embedder.Embedder
 	if cfg.Embedder.OllamaURL != "" && cfg.Embedder.Model != "" {

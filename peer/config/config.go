@@ -8,8 +8,9 @@ import (
 )
 
 type Config struct {
-	Tracker TrackerConfig `yaml:"tracker"`
-	Server  ServerConfig  `yaml:"server"`
+	Tracker  TrackerConfig  `yaml:"tracker"`
+	Server   ServerConfig   `yaml:"server"`
+	Download DownloadConfig `yaml:"download"`
 }
 
 type TrackerConfig struct {
@@ -19,6 +20,19 @@ type TrackerConfig struct {
 type ServerConfig struct {
 	APIPort int `yaml:"api_port"`
 	P2PPort int `yaml:"p2p_port"`
+}
+
+type DownloadConfig struct {
+	Workers int `yaml:"workers"`
+}
+
+const DefaultDownloadWorkers = 10
+
+func (d *DownloadConfig) WorkersOrDefault() int {
+	if d.Workers <= 0 {
+		return DefaultDownloadWorkers
+	}
+	return d.Workers
 }
 
 func Load(path string) (*Config, error) {

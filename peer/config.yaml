@@ -4,3 +4,6 @@ tracker:
 server:
   api_port: 9090
   p2p_port: 9000
+
+download:
+  workers: 10

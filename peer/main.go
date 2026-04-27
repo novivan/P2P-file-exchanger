@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha1"
 	"embed"
 	"fmt"
@@ -39,10 +40,11 @@ type TorrentInfo struct {
 }
 
 type PeerServer struct {
-	peerID      uuid.UUID
-	trackerURL  string
-	p2pAddr     string // внешний адрес, нужен для announce
-	downloadDir string
+	peerID          uuid.UUID
+	trackerURL      string
+	p2pAddr         string // внешний адрес, нужен для announce
+	downloadDir     string
+	downloadWorkers int
 
 	tracker *tracker_client.Client
 	store   *p2p.DiskChunkStore
@@ -53,7 +55,7 @@ type PeerServer struct {
 	torrents map[uuid.UUID]*TorrentInfo
 }
 
-func NewPeerServer(trackerURL, p2pListenAddr, p2pExternalAddr, downloadDir string) (*PeerServer, error) {
+func NewPeerServer(trackerURL, p2pListenAddr, p2pExternalAddr, downloadDir string, downloadWorkers int) (*PeerServer, error) {
 	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
 		return nil, fmt.Errorf("NewPeerServer: mkdir %q: %w", downloadDir, err)
 	}
@@ -79,15 +81,16 @@ func NewPeerServer(trackerURL, p2pListenAddr, p2pExternalAddr, downloadDir strin
 	}
 
 	ps := &PeerServer{
-		peerID:      peerID,
-		trackerURL:  trackerURL,
-		p2pAddr:     externalAddr,
-		downloadDir: downloadDir,
-		tracker:     tracker,
-		store:       store,
-		seeder:      seeder,
-		codec:       &codec.Codec{},
-		torrents:    make(map[uuid.UUID]*TorrentInfo),
+		peerID:          peerID,
+		trackerURL:      trackerURL,
+		p2pAddr:         externalAddr,
+		downloadDir:     downloadDir,
+		downloadWorkers: downloadWorkers,
+		tracker:         tracker,
+		store:           store,
+		seeder:          seeder,
+		codec:           &codec.Codec{},
+		torrents:        make(map[uuid.UUID]*TorrentInfo),
 	}
 
 	go func() {
@@ -233,35 +236,10 @@ func (ps *PeerServer) Download(manifestID uuid.UUID) (*TorrentInfo, error) {
 		return nil, fmt.Errorf("Download: truncate %q: %w", savePath, err)
 	}
 
-	chunksAmount := uint32(len(manifest.Info.Pieces))
-	for idx := uint32(0); idx < chunksAmount; idx++ {
-		var chunk []byte
-		var lastErr error
-		for _, addr := range candidates {
-			data, err := p2p.RequestChunk(addr, manifestID, idx)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			if sha1.Sum(data) != manifest.Info.Pieces[idx] {
-				lastErr = fmt.Errorf("sha1 mismatch for chunk %d from %s", idx, addr)
-				continue
-			}
-			chunk = data
-			break
-		}
-		if chunk == nil {
-			f.Close()
-			os.Remove(savePath)
-			return nil, fmt.Errorf("Download: chunk %d: %v", idx, lastErr)
-		}
-
-		offset := int64(idx) * manifest.Info.PieceLength
-		if _, err := f.WriteAt(chunk, offset); err != nil {
-			f.Close()
-			os.Remove(savePath)
-			return nil, fmt.Errorf("Download: write chunk %d: %w", idx, err)
-		}
+	if err := ps.fetchChunksParallel(manifestID, manifest, candidates, f); err != nil {
+		f.Close()
+		os.Remove(savePath)
+		return nil, err
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
@@ -281,6 +259,117 @@ func (ps *PeerServer) Download(manifestID uuid.UUID) (*TorrentInfo, error) {
 	ps.mu.Unlock()
 
 	return info, nil
+}
+
+type chunkResult struct {
+	idx  uint32
+	data []byte
+	err  error
+}
+
+func (ps *PeerServer) fetchChunksParallel(manifestID uuid.UUID, manifest codec.ManifestFile, candidates []string, f *os.File) error {
+	chunksAmount := uint32(len(manifest.Info.Pieces))
+	if chunksAmount == 0 {
+		return nil
+	}
+
+	workers := ps.downloadWorkers
+	if workers <= 0 {
+		workers = config.DefaultDownloadWorkers
+	}
+	if workers > int(chunksAmount) {
+		workers = int(chunksAmount)
+	}
+
+	jobs := make(chan uint32, chunksAmount)
+	results := make(chan chunkResult, workers)
+
+	for idx := uint32(0); idx < chunksAmount; idx++ {
+		jobs <- idx
+	}
+	close(jobs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case idx, ok := <-jobs:
+					if !ok {
+						return
+					}
+					data, err := fetchOneChunk(idx, manifestID, manifest.Info.Pieces[idx], candidates, workerID)
+					select {
+					case results <- chunkResult{idx: idx, data: data, err: err}:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}(w)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var firstErr error
+	received := uint32(0)
+	for r := range results {
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("Download: chunk %d: %w", r.idx, r.err)
+			}
+			cancel()
+			continue
+		}
+		offset := int64(r.idx) * manifest.Info.PieceLength
+		if _, werr := f.WriteAt(r.data, offset); werr != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("Download: write chunk %d: %w", r.idx, werr)
+			}
+			cancel()
+			continue
+		}
+		received++
+	}
+
+	if firstErr != nil {
+		return firstErr
+	}
+	if received != chunksAmount {
+		return fmt.Errorf("Download: got %d/%d chunks", received, chunksAmount)
+	}
+	return nil
+}
+
+func fetchOneChunk(idx uint32, manifestID uuid.UUID, expectedHash [sha1.Size]byte, candidates []string, workerID int) ([]byte, error) {
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no candidates")
+	}
+	var lastErr error
+	for i := 0; i < len(candidates); i++ {
+		addr := candidates[(workerID+i)%len(candidates)]
+		data, err := p2p.RequestChunk(addr, manifestID, idx)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if sha1.Sum(data) != expectedHash {
+			lastErr = fmt.Errorf("sha1 mismatch from %s", addr)
+			continue
+		}
+		return data, nil
+	}
+	return nil, lastErr
 }
 
 func (ps *PeerServer) ListTorrents() []TorrentInfo {
@@ -420,7 +509,7 @@ func main() {
 	p2pExternal := p2pListen
 	apiAddr := net.JoinHostPort(localIP, fmt.Sprintf("%d", cfg.Server.APIPort))
 
-	ps, err := NewPeerServer(trackerURL, p2pListen, p2pExternal, downloadDir)
+	ps, err := NewPeerServer(trackerURL, p2pListen, p2pExternal, downloadDir, cfg.Download.WorkersOrDefault())
 	if err != nil {
 		log.Fatalf("peer: %v", err)
 	}
